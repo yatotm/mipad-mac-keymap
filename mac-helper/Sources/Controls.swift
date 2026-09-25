@@ -101,12 +101,17 @@ func toggleMute(input: Bool) throws -> Bool {
 }
 
 func run(_ executable: URL, _ arguments: [String]) throws -> String {
-    let task = Process(), output = Pipe(), errors = Pipe()
+    let task = Process(), output = Pipe()
     task.executableURL = executable; task.arguments = arguments
-    task.standardOutput = output; task.standardError = errors
-    try task.run(); task.waitUntilExit()
+    task.standardOutput = output; task.standardError = FileHandle.nullDevice
+    try task.run()
+    let timeout = DispatchWorkItem { if task.isRunning { task.terminate() } }
+    DispatchQueue.global().asyncAfter(deadline: .now() + 5, execute: timeout)
+    let data = output.fileHandleForReading.readDataToEndOfFile()
+    task.waitUntilExit()
+    timeout.cancel()
     guard task.terminationStatus == 0 else { throw ControlError.failed("控制命令失败：\(task.terminationStatus)") }
-    return String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    return String(data: data, encoding: .utf8) ?? ""
 }
 
 func brightness(_ delta: Double) throws -> Double {
@@ -164,6 +169,7 @@ func executeControl(_ action: String) -> [String: Any] {
         case "launchpad": try openApplication("/System/Applications/Launchpad.app")
         case "navigate-back", "navigate-forward":
             result["navigation"] = try navigate(back: action == "navigate-back")
+        case "space-left", "space-right", "windows", "app-windows": try systemNavigation(action)
         case "sleep": _ = try run(URL(fileURLWithPath: "/usr/bin/pmset"), ["sleepnow"])
         case "check":
             let device = try audioDevice(input: false)

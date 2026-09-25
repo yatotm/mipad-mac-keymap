@@ -2,6 +2,7 @@
 """安装已构建的统一 App；沿用一个 launchd 项，辅助功能授权由系统设置处理。"""
 from pathlib import Path
 import os
+import json
 import plistlib
 import shutil
 import signal
@@ -16,6 +17,16 @@ staged = target.with_name("Pad Mac Helper.staged.app")
 target.parent.mkdir(parents=True, exist_ok=True)
 backup = root / ".local/rollback/mac"
 backup.mkdir(parents=True, exist_ok=True)
+connection = root / ".local/connection.json"
+if connection.exists():
+    config = json.loads(connection.read_text())
+    if not config.get("deviceSerial") or not str(config.get("adb", "")).startswith("/"):
+        raise SystemExit("本地连接配置缺少设备身份或 ADB 路径")
+    support = user / "Library/Application Support/Pad UU"
+    support.mkdir(parents=True, exist_ok=True, mode=0o700)
+    config_target = support / "connection.json"
+    config_target.write_text(json.dumps(config, indent=2) + "\n")
+    config_target.chmod(0o600)
 subprocess.run(["codesign", "--verify", "--deep", "--strict", str(source)], check=True)
 if staged.exists():
     shutil.rmtree(staged)

@@ -14,7 +14,6 @@ import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
-import android.view.ViewGroup;
 import java.io.File;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -44,8 +43,9 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
     private Field motionField, deltaX, deltaY;
     private Constructor<?> motionWrapper;
     private Constructor<?> pointerWrapper;
-    private Method sendCommand, horizontal, vertical, fragmentView, fragmentActivity;
+    private Method sendCommand, fragmentView, fragmentActivity;
     private Method mouseButton, updatePointer;
+    private InputPipe inputPipe;
     private File configFile;
     private long configStamp = Long.MIN_VALUE;
     private boolean enabled = true, reverse = true, trace, failed;
@@ -70,6 +70,7 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
         final TwoFingerIntent twoIntent = new TwoFingerIntent();
         boolean twoCaptured;
         int twoSamples;
+        boolean scrollActive, momentumActive;
         final ScrollMomentum momentum = new ScrollMomentum();
         Runnable inertia;
         boolean traceMomentum;
@@ -81,6 +82,7 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
         void reset() {
             swipe.reset(); scroll.reset(); drag.reset(); momentum.stop();
             twoIntent.reset(); twoCaptured = false; twoSamples = 0;
+            scrollActive = momentumActive = false;
             first = second = -1; maxFingers = 0; mode = 0;
         }
     }
@@ -97,6 +99,7 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
                         return;
                     }
                     configFile = new File(context.getFilesDir(), "pad_uu_touchpad.json");
+                    inputPipe = new InputPipe(context.getFilesDir());
                     install(context.getClassLoader());
                 } catch (Throwable error) { fail(error); }
             }
@@ -118,8 +121,6 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
         motionField.setAccessible(true); deltaX.setAccessible(true); deltaY.setAccessible(true);
         motionWrapper = motion.getConstructor(MotionEvent.class);
         sendCommand = fragment.getMethod("H", String.class);
-        horizontal = commands.getMethod("w", int.class);
-        vertical = commands.getMethod("x", int.class);
         mouseButton = commands.getMethod("y", int.class, boolean.class);
         Class<?> pointerEvent = XposedHelpers.findClass("oa.z", loader);
         pointerWrapper = pointerEvent.getConstructor(PointF.class, PointF.class);
@@ -181,6 +182,8 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
                         hook.args[0] = event = mapped;
                     }
                     if (!failed && enabled && physicalKeyboard(event.getDevice())) {
+                        // 仅发送修饰状态，不传输或记录用户输入的文字。
+                        inputPipe.modifiers(event.getMetaState());
                         String action = macAction(event.getKeyCode());
                         Activity activity = activityOf(((View) hook.thisObject).getContext());
                         if (action != null && activity != null
@@ -196,10 +199,10 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
                                             event.getDownTime(), event.getRepeatCount())
                                     && (event.getRepeatCount() == 0 || action.startsWith("volume-") || action.startsWith("brightness-"))) {
                                 try {
-                                    sendControl(activity, action, event.getMetaState());
+                                    sendControl(action);
                                     if (!controlAnnounced) {
                                         controlAnnounced = true;
-                                        Log.i(TAG, "已通过 UU 键盘通道发出 Mac 功能控制组合");
+                                        Log.i(TAG, "Fn 已交给独立输入通道");
                                     }
                                 } catch (Throwable error) {
                                     if (!controlErrorAnnounced) {
@@ -253,7 +256,7 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
             throw error;
         }
         loadConfig();
-        Log.i(TAG, "v0.10.1 已加载：先释放控制修饰键，再提交 Mac 动作");
+        Log.i(TAG, "v0.11.0 已加载：Fn和双指手势使用私有输入通道，不发送控制组合键");
     }
 
     private void fail(Throwable error) {
@@ -281,43 +284,16 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
     }
 
     private void openLaunchpad(Object fragment) throws Exception {
-        sendControl((Activity) fragmentActivity.invoke(fragment), "launchpad", 0);
+        sendControl("launchpad");
         if (!launchpadAnnounced) {
             launchpadAnnounced = true;
             Log.i(TAG, "已通过统一 Mac 组件请求打开 Launchpad");
         }
     }
 
-    private void sendControl(Activity activity, String action, int existingMeta) throws Exception {
-        View input = findInput(activity.getWindow().getDecorView());
-        int keyboard = -1;
-        for (int id : InputDevice.getDeviceIds()) {
-            if (physicalKeyboard(InputDevice.getDevice(id))) { keyboard = id; break; }
-        }
-        if (input == null || keyboard < 0) throw new IllegalStateException("未找到 UU 实体键盘入口");
-        int key = RemoteCommand.key(action);
-        int[] keys = {KeyEvent.KEYCODE_CTRL_LEFT, KeyEvent.KEYCODE_ALT_LEFT, KeyEvent.KEYCODE_META_LEFT};
-        int[] masks = {KeyEvent.META_CTRL_ON, KeyEvent.META_ALT_ON, KeyEvent.META_META_ON};
-        boolean[] added = new boolean[3];
-        int meta = existingMeta;
-        long time = SystemClock.uptimeMillis();
-        try {
-            for (int i = 0; i < keys.length; i++) if ((meta & masks[i]) == 0) {
-                meta |= masks[i]; added[i] = true;
-                dispatch(input, keyboard, time, KeyEvent.ACTION_DOWN, keys[i], meta);
-            }
-            dispatch(input, keyboard, time, KeyEvent.ACTION_DOWN, key, meta);
-        } finally {
-            try {
-                // 先释放本次补上的修饰键，再用动作键的松开提交，避免 Option 进入启动台编辑模式。
-                for (int i = keys.length - 1; i >= 0; i--) if (added[i]) {
-                    meta &= ~masks[i];
-                    dispatch(input, keyboard, time, KeyEvent.ACTION_UP, keys[i], meta);
-                }
-            } finally {
-                dispatch(input, keyboard, time, KeyEvent.ACTION_UP, key, meta);
-            }
-        }
+    private void sendControl(String action) {
+        boolean sent = inputPipe.action(action);
+        if (trace && traceBudget-- > 0) Log.i(TAG, "独立输入动作=" + action + " 发送=" + sent);
     }
 
     private static Activity activityOf(Context context) {
@@ -361,9 +337,11 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
         Session session = sessions.remove(fragment);
         if (session != null) {
             stopMomentum(session);
+            endScroll(session, true);
             releaseDrag(fragment, session);
             scrollOrigins.discard(session);
         }
+        if (sessions.isEmpty()) inputPipe.reset();
     }
 
     private void releaseAll() {
@@ -379,6 +357,10 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
         if (session.inertia != null) handler.removeCallbacks(session.inertia);
         session.inertia = null;
         session.momentum.stop();
+        if (session.momentumActive) {
+            inputPipe.scroll(0, 0, "momentum-ended");
+            session.momentumActive = false;
+        }
     }
 
     private void startMomentum(Object fragment, Session session, long time) {
@@ -407,16 +389,30 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
         handler.postDelayed(session.inertia, 16);
     }
 
+    private void endScroll(Session session, boolean cancelled) {
+        if (session.scrollActive) {
+            inputPipe.scroll(0, 0, cancelled ? "cancelled" : "ended");
+            session.scrollActive = false;
+        }
+    }
+
     private void sendScroll(Object fragment, Session session, float dx, float dy, float factor) throws Exception {
-        // 横向倍率只在输出端应用一次，接触位移与惯性使用相同比例。
         int x = session.scroll.convert(0, dx, factor), y = session.scroll.convert(1, dy, factor);
-        if (x != 0) sendCommand.invoke(fragment, horizontal.invoke(null, x));
-        if (y != 0) sendCommand.invoke(fragment, vertical.invoke(null, y));
+        if (x == 0 && y == 0) return;
+        String phase;
+        if (session.inertia != null) {
+            phase = session.momentumActive ? "momentum-changed" : "momentum-began";
+            session.momentumActive = true;
+        } else {
+            phase = session.scrollActive ? "changed" : "began";
+            session.scrollActive = true;
+        }
+        boolean sent = inputPipe.scroll(-x, y, phase);
         if (!scrollAnnounced) {
             scrollAnnounced = true;
-            Log.i(TAG, "触控板滚动适配已命中：反向=" + reverse + " 倍率=" + scrollScale);
+            Log.i(TAG, "独立滚动已命中：倍率=" + scrollScale + " 发送=" + sent);
         }
-        if (trace && scrollTraceBudget-- > 0) Log.i(TAG, "滚动 " + dx + "," + dy + " → " + x + "," + y);
+        if (trace && scrollTraceBudget-- > 0) Log.i(TAG, "滚动 " + phase + " x=" + -x + " y=" + y + " 发送=" + sent);
     }
 
     private void loadConfig() {
@@ -501,6 +497,7 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
                 Session session = sessions.computeIfAbsent(hook.thisObject, unused -> new Session());
                 if (session.deviceId != event.getDeviceId() || event.getActionMasked() == MotionEvent.ACTION_DOWN) {
                     stopMomentum(session);
+                    endScroll(session, true);
                     releaseDrag(hook.thisObject, session);
                     session.reset(); session.deviceId = event.getDeviceId();
                 }
@@ -514,7 +511,8 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
                 if (removed >= 0) count--;
                 if (count > 0) { x /= count; y /= count; }
                 session.maxFingers = Math.max(session.maxFingers, count);
-                int modifiers = KeyEvent.META_CTRL_ON | KeyEvent.META_ALT_ON | KeyEvent.META_META_ON | KeyEvent.META_SHIFT_ON;
+                int modifiers = KeyEvent.META_CTRL_ON | KeyEvent.META_ALT_ON | KeyEvent.META_META_ON
+                        | KeyEvent.META_SHIFT_ON | KeyEvent.META_FUNCTION_ON;
                 if (trace && action == MotionEvent.ACTION_POINTER_DOWN && traceBudget-- > 0) {
                     // Android 15 隐藏轴 53 为手势手指数；同时保留原始触点数作对照。
                     Log.i(TAG, "触点=" + count + " 分类=" + event.getClassification()
@@ -557,8 +555,7 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
                             stopMomentum(session);
                             if (trace && traceBudget-- > 0) Log.i(TAG, "双指横向提交=" + intent + " meta=" + event.getMetaState());
                             if ((event.getMetaState() & modifiers) == 0) {
-                                sendControl((Activity) fragmentActivity.invoke(hook.thisObject),
-                                        intent == TwoFingerIntent.RIGHT ? "navigate-back" : "navigate-forward", 0);
+                                sendControl(intent == TwoFingerIntent.RIGHT ? "navigate-back" : "navigate-forward");
                             }
                         }
                         return;
@@ -569,6 +566,7 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
                 if (claim) {
                     boolean wasOriginal = session.mode == 0;
                     stopMomentum(session);
+                    endScroll(session, true);
                     session.mode = count;
                     session.drag.begin(x, y, event.getEventTime());
                     session.three.begin(x / resolution(event.getDevice(), 0),
@@ -584,11 +582,13 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
                     hook.setResult(null);
                     if (session.mode == 2 && action == MotionEvent.ACTION_UP) {
                         session.mode = 0;
+                        endScroll(session, false);
                         if (session.twoIntent.isVertical()) startMomentum(hook.thisObject, session, event.getEventTime());
                         return;
                     }
                     if (action == MotionEvent.ACTION_UP || count > 4 || event.getButtonState() != 0) {
                         stopMomentum(session);
+                        endScroll(session, true);
                         releaseDrag(hook.thisObject, session);
                         session.mode = action == MotionEvent.ACTION_UP ? 0 : 5;
                         session.swipe.reset();
@@ -616,7 +616,7 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
                                 int result = session.swipe.update(action, count,
                                         x / resolution(event.getDevice(), 0), y / resolution(event.getDevice(), 1),
                                         (event.getMetaState() & modifiers) != 0, swipeMm);
-                                if (result > SwipeState.CONSUME) shortcut(hook.thisObject, result);
+                                if (result > SwipeState.CONSUME) navigate(result);
                                 return;
                             }
                             int drag = session.drag.move(x, y, event.getEventTime(),
@@ -634,7 +634,7 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
                         int result = session.swipe.update(action, count,
                                 x / resolution(event.getDevice(), 0), y / resolution(event.getDevice(), 1),
                                 (event.getMetaState() & modifiers) != 0, swipeMm);
-                        if (result > SwipeState.CONSUME) shortcut(hook.thisObject, result);
+                        if (result > SwipeState.CONSUME) navigate(result);
                     }
                 }
             } catch (Throwable error) { fail(error); }
@@ -671,48 +671,11 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
         }
     }
 
-    private static View findInput(View view) {
-        if (INPUT_VIEW.equals(view.getClass().getName())) return view;
-        if (view instanceof ViewGroup) {
-            ViewGroup group = (ViewGroup) view;
-            for (int i = 0; i < group.getChildCount(); i++) {
-                View found = findInput(group.getChildAt(i));
-                if (found != null) return found;
-            }
-        }
-        return null;
-    }
-
-    private void shortcut(Object fragment, int direction) throws Exception {
-        Activity activity = (Activity) fragmentActivity.invoke(fragment);
-        View input = findInput(activity.getWindow().getDecorView());
-        int keyboard = -1;
-        for (int id : InputDevice.getDeviceIds()) {
-            InputDevice device = InputDevice.getDevice(id);
-            if (device != null && device.getKeyboardType() == InputDevice.KEYBOARD_TYPE_ALPHABETIC
-                    && ((device.getVendorId() == 0x15d9 && device.getProductId() == 0x00a3)
-                    || (device.getVendorId() == 0xbf01 && device.getProductId() == 0x0040))) { keyboard = id; break; }
-        }
-        if (input == null || keyboard < 0) { Log.w(TAG, "未找到 UU 输入视图或实体键盘"); return; }
-        // 与 Mac 自然滑动一致：手指左滑进入右侧桌面，反向亦然。
-        int key = direction == SwipeState.LEFT ? KeyEvent.KEYCODE_DPAD_RIGHT
-                : direction == SwipeState.RIGHT ? KeyEvent.KEYCODE_DPAD_LEFT
-                : direction == SwipeState.UP ? KeyEvent.KEYCODE_DPAD_UP : KeyEvent.KEYCODE_DPAD_DOWN;
-        long time = SystemClock.uptimeMillis();
-        int ctrl = KeyEvent.META_CTRL_ON | KeyEvent.META_CTRL_LEFT_ON;
-        boolean accepted = false;
-        try {
-            boolean controlAccepted = dispatch(input, keyboard, time, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_CTRL_LEFT, ctrl);
-            accepted = dispatch(input, keyboard, time, KeyEvent.ACTION_DOWN, key, ctrl) && controlAccepted;
-        } finally {
-            try { dispatch(input, keyboard, time, KeyEvent.ACTION_UP, key, ctrl); }
-            finally { dispatch(input, keyboard, time, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_CTRL_LEFT, 0); }
-        }
-        if (trace && traceBudget-- > 0) Log.i(TAG, "手势=" + direction + " 快捷键=" + key + " UU接收=" + accepted);
-    }
-
-    private static boolean dispatch(View view, int device, long time, int action, int key, int meta) {
-        return view.dispatchKeyEvent(new KeyEvent(time, SystemClock.uptimeMillis(), action, key,
-                0, meta, device, 0, 0, InputDevice.SOURCE_KEYBOARD));
+    private void navigate(int direction) {
+        // 自然方向：手指左滑进入右侧桌面。这里只传动作名称，不触碰 UU 的键盘状态。
+        String action = direction == SwipeState.LEFT ? "space-right"
+                : direction == SwipeState.RIGHT ? "space-left"
+                : direction == SwipeState.UP ? "windows" : "app-windows";
+        sendControl(action);
     }
 }

@@ -35,6 +35,22 @@ python3 tools/deploy_android.py --serial '<已授权设备地址>'
 
 ## Mac
 
+先建立未提交的 `.local/connection.json`，示例：
+
+```json
+{
+  "adb": "/opt/homebrew/bin/adb",
+  "deviceSerial": "替换为已配对平板的 ro.serialno",
+  "endpoint": "pad.example.local:23333",
+  "discovery": true
+}
+```
+
+`endpoint` 可以省略，此时依赖已连接设备和 mDNS。安装脚本把配置保存到 `~/Library/Application Support/Pad UU/connection.json`，权限为 0600。App 自动记住发现的新地址；重新运行安装脚本会用 `.local` 配置覆盖它。配对和设备身份核验不会因改地址而跳过。
+
+同一局域网仍需两端可路由、无客户端隔离。mDNS 只作为便利发现手段，跨网段可填写实际可达地址。Tailscale 预留在这个连接配置入口，未来还需配置 Android VPN 入站的固定端口转发，当前版本没有声称完成 VPN 支持。
+
+
 ```sh
 python3 tools/build_mac.py
 python3 tools/install_mac.py
@@ -42,15 +58,17 @@ python3 tools/install_mac.py
 
 构建只生成 `build/Pad Mac Helper.app`，先运行无输入副作用的检查，再签名。安装脚本将它部署到当前用户的 `Applications`，沿用唯一的 `local.pad.uu.ScrollBridge` launchd 项；旧组件备份只放在 `.local/rollback/mac`。
 
-**先完成编译和签名，再登记辅助功能权限。** 临时签名的代码摘要改变后，即使系统设置开关显示开启，也需要核对该版本实际获得的权限。安装后的 `helper-status.json` 应显示 `permission`、`keyboard_tap`、`scroll_tap` 均为 true。
+**先完成编译和签名，再登记辅助功能权限。** 临时签名的代码摘要改变后，即使系统设置开关显示开启，也需要核对该版本实际获得的权限。安装后的 `helper-status.json` 应显示 `permission=true`、`scroll_tap=true`、`keyboard_tap=false`，以及 `connection=connected`。用 `CGGetEventTapList` 还可核对该进程只有滚轮事件掩码 4194304，没有键盘拦截。
 
-新组件运行正常后，删除原 `~/Applications/Pad UU Scroll.app`、`~/Library/Application Support/Pad UU/Controls.app` 及后者的旧权限条目。Mos 保留。不要启动第二个同职责常驻进程。
+当前已清除原 `~/Applications/Pad UU Scroll.app`、`~/Library/Application Support/Pad UU/Controls.app` 及后者的旧权限条目。若在另一台机器迁移，也应检查这些历史项。Mos 保留。不要启动第二个同职责常驻进程。
 
 ## 验证边界
 
 - 查表和状态检查证明分支、配对和取消逻辑，不证明实体键盘传输。
 - Android 普通注入会变成虚拟设备，不能把注入成功当作实体测试通过。
 - 优先在独立浏览器测试页检查导航和普通键，避免在用户实际文本中测试删除或快捷键。
+- 独立通道的心跳不等于动作验收；同时核对真实 Fn/滚动计数、错误/过期计数和最终 App 行为。
+- 断线测试只重启本 Helper，不能清除配对、重启全局 ADB server 或改成明文 `adb tcpip`。
 - Fn 验收先用音量减/加与亮度减/加；跳过睡眠。同时核对 Mac `last-action.json`，区分请求没到和系统接口失败。
 - 完成后关闭临时 trace，停止采样，清理 `.cache` 和编译中间文件。保留本地签名、源码、必要回退包和简短结论。
 

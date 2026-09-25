@@ -17,8 +17,8 @@ info = {
     "CFBundleDisplayName": "Pad Mac Helper",
     "CFBundleExecutable": "PadMacHelper",
     "CFBundlePackageType": "APPL",
-    "CFBundleVersion": "3",
-    "CFBundleShortVersionString": "0.2.1",
+    "CFBundleVersion": "4",
+    "CFBundleShortVersionString": "0.3.0",
     "LSUIElement": True,
     "NSHighResolutionCapable": True,
 }

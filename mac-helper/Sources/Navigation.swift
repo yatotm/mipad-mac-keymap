@@ -1,61 +1,60 @@
 import AppKit
 import ApplicationServices
 
-// 只取鼠标下的进程编号，不读取窗口、网页或通知正文。
-private func pointerApplication() -> NSRunningApplication? {
-    let point = CGEvent(source: nil)?.location ?? .zero
-    var element: AXUIElement?
-    guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y),
-                                          &element) == .success, let element else { return nil }
-    var pid: pid_t = 0
-    guard AXUIElementGetPid(element, &pid) == .success else { return nil }
-    return NSRunningApplication(processIdentifier: pid)
-}
+// 横向一次动作提交完整的原生滚动阶段。没有键盘组合，也没有惯性尾巴。
+private var horizontalGeneration = 0
+private var horizontalEnd: (() -> Void)?
 
-private func pressCommandArrow(back: Bool) throws {
-    for down in [true, false] {
-        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: back ? 123 : 124, keyDown: down) else {
-            throw ControlError.failed("无法创建导航事件")
-        }
-        event.flags = .maskCommand
-        event.setIntegerValueField(.eventSourceUserData, value: bridgeMarker)
-        event.post(tap: .cghidEventTap)
-    }
-}
-
-private func fixedHorizontalStep(back: Bool) {
-    let point = CGEvent(source: nil)?.location ?? .zero
-    // 非浏览器保留一次短促的横向滑动，明确结束，不生成惯性或等待超时。
-    for (delay, delta, phase) in [(0.0, back ? 480 : -480, CGScrollPhase.began),
-                                   (0.035, 0, CGScrollPhase.ended)] {
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
-                                       wheelCount: 2, wheel1: 0, wheel2: Int32(delta), wheel3: 0) else { return }
-            event.location = point
-            event.setIntegerValueField(.eventSourceUserData, value: bridgeMarker)
-            event.setIntegerValueField(.scrollWheelEventScrollCount, value: 1)
-            event.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
-            event.post(tap: .cgAnnotatedSessionEventTap)
-        }
-    }
+func cancelHorizontalNavigation() {
+    horizontalGeneration += 1
+    horizontalEnd?()
+    horizontalEnd = nil
 }
 
 func navigate(back: Bool) throws -> String {
     guard AXIsProcessTrusted() else { throw ControlError.failed("导航需要辅助功能权限") }
-    let pointed = pointerApplication()?.bundleIdentifier ?? ""
-    let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
-    let browsers: Set<String> = ["com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.dev",
-                                "com.apple.Safari", "com.microsoft.edgemac", "com.brave.Browser", "org.mozilla.firefox"]
-    if pointed == "com.apple.notificationcenterui" {
-        fixedHorizontalStep(back: back)
-        return "notification-step"
+    cancelHorizontalNavigation()
+    let generation = horizontalGeneration
+    let point = CGEvent(source: nil)?.location ?? .zero
+    let source = CGEventSource(stateID: .privateState)
+    let direction: Int32 = back ? 1 : -1
+    horizontalEnd = {
+        NativeScroll.event(source: source, x: 0, y: 0, phase: "ended", flags: [], point: point)?
+            .post(tap: .cgAnnotatedSessionEventTap)
     }
-    if pointed == "com.apple.dock" || front == "com.apple.dock" || front == "com.apple.launchpad.launcher"
-            || browsers.contains(front) {
-        // Chrome 的历史导航和 Launchpad 的整页切换都使用 Command+方向键。
-        try pressCommandArrow(back: back)
-        return "command-arrow"
+    for (delay, delta, phase) in [(0.0, Int32(0), "began"), (0.016, 80, "changed"),
+                                  (0.032, 160, "changed"), (0.048, 240, "changed"), (0.080, 0, "ended")] {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            guard horizontalGeneration == generation else { return }
+            NativeScroll.event(source: source, x: delta * direction, y: 0, phase: phase, flags: [], point: point)?
+                .post(tap: .cgAnnotatedSessionEventTap)
+            if phase == "ended" { horizontalEnd = nil }
+        }
     }
-    fixedHorizontalStep(back: back)
-    return "horizontal-step"
+    return "native-phased-scroll"
+}
+
+func systemNavigation(_ action: String) throws {
+    if action == "windows" {
+        try openApplication("/System/Applications/Mission Control.app")
+        return
+    }
+    // Spaces 和应用窗口概览暂用系统现有快捷入口；不经过 UU，也不占用任何用户快捷键。
+    // 若用户确实按着修饰键则取消，避免合成松开覆盖用户的真实按住状态。
+    let held = CGEventSource.flagsState(.combinedSessionState)
+        .intersection([.maskControl, .maskAlternate, .maskCommand, .maskShift])
+    guard held.isEmpty else { throw ControlError.failed("用户仍按着修饰键，已跳过系统导航") }
+    let key: CGKeyCode = action == "space-left" ? 123 : action == "space-right" ? 124 : 125
+    let source = CGEventSource(stateID: .privateState)
+    for (code, down, isModifier, flags) in [(CGKeyCode(59), true, true, CGEventFlags.maskControl),
+            (key, true, false, .maskControl), (key, false, false, .maskControl),
+            (CGKeyCode(59), false, true, CGEventFlags())] {
+        guard let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down) else {
+            throw ControlError.failed("无法创建系统导航事件")
+        }
+        if isModifier { event.type = .flagsChanged }
+        event.flags = flags
+        event.setIntegerValueField(.eventSourceUserData, value: bridgeMarker)
+        event.post(tap: .cghidEventTap)
+    }
 }

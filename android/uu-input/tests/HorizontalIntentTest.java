@@ -1,5 +1,4 @@
 import local.pad.uu.touchpad.TwoFingerIntent;
-import local.pad.uu.touchpad.RemoteCommand;
 
 public final class HorizontalIntentTest {
     private static void check(boolean ok, String why) { if (!ok) throw new AssertionError(why); }
@@ -24,8 +23,6 @@ public final class HorizontalIntentTest {
                 "等待方向时不丢失纵向位移");
         state.reset();
         check(state.move(Float.NaN, 3, 20) == 0, "拒绝异常触点");
-        check(RemoteCommand.key("volume-down") == 141 && RemoteCommand.key("launchpad") == 62,
-                "功能和手势通道使用约定键位");
-        System.out.println("横向一次性导航、纵向连续滚动及控制协议检查通过");
+        System.out.println("横向一次性导航、纵向连续滚动检查通过");
     }
 }

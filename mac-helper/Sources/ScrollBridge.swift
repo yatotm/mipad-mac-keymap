@@ -23,16 +23,18 @@ struct ScrollPhaseState {
 final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
-    private var keyTap: CFMachPort?
-    private var keySource: CFRunLoopSource?
-    private var commandState = CommandState()
+    private var reader: AdbInputReader?
+    private var inputClock = InputClock()
+    private let nativeScroll = NativeScroll()
+    private var connection = "stopped"
+    private var receivedScroll = 0
+    private var rejectedFrames = 0
     private var receivedActions: [String: Int] = [:]
     private var finishedActions: [String: Int] = [:]
-    private var cancelledCommands = 0
     private let statusWriter = DispatchQueue(label: "local.pad.uu.status", qos: .utility)
     private var statusQueued = false
     private let actions = DispatchQueue(label: "local.pad.uu.controls", qos: .userInitiated)
-    private var pendingActions: [String] = []
+    private var pendingActions: [(action: String, deadline: Double)] = []
     private var actionBusy = false
     private var commandCount = 0
     private var status: NSStatusItem?
@@ -78,7 +80,7 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
         title.font = .boldSystemFont(ofSize: 22)
         title.frame = NSRect(x: 24, y: 205, width: 470, height: 32)
         let info = NSTextField(wrappingLabelWithString:
-            "统一处理 UU 的功能控制、导航和滚动适配。\n只识别约定控制组合，不记录普通键盘输入。")
+            "通过已配对的 ADB 接收触控和功能控制。\n普通打字与组合键仍由 UU 处理。")
         info.frame = NSRect(x: 24, y: 128, width: 470, height: 62)
         let label = NSTextField(labelWithString: "等待辅助功能权限")
         label.frame = NSRect(x: 24, y: 92, width: 470, height: 28)
@@ -101,7 +103,7 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func menuWillOpen(_ menu: NSMenu) {
-        summary?.title = tap != nil && keyTap != nil ? "滚动 \(count) 次 · 控制 \(commandCount) 次" : "未启用：需辅助功能权限"
+        summary?.title = tap != nil ? "通道：\(connection) · 滚动 \(receivedScroll) 次" : "未启用：需辅助功能权限"
     }
 
     @objc private func openSettings() {
@@ -135,22 +137,11 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: port, enable: true)
         summary?.title = "UU 滚动适配已启用"
-        let keyCallback: CGEventTapCallBack = { _, type, event, pointer in
-            guard let pointer else { return Unmanaged.passUnretained(event) }
-            return Unmanaged<Bridge>.fromOpaque(pointer).takeUnretainedValue().handleKey(type, event)
-        }
-        let keyMask = (CGEventMask(1) << CGEventType.keyDown.rawValue) | (CGEventMask(1) << CGEventType.keyUp.rawValue)
-        guard let keyboard = CGEvent.tapCreate(tap: .cgSessionEventTap,
-                place: .headInsertEventTap, options: .defaultTap, eventsOfInterest: keyMask,
-                callback: keyCallback, userInfo: Unmanaged.passUnretained(self).toOpaque()) else {
-            pause(); stateLabel?.stringValue = "无法建立功能控制入口，请检查权限"; writeStatus()
-            return
-        }
-        keyTap = keyboard
-        keySource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, keyboard, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), keySource, .commonModes)
-        CGEvent.tapEnable(tap: keyboard, enable: true)
-        stateLabel?.stringValue = "已启用：UU 控制与滚动适配"
+        let input = AdbInputReader(onFrame: { [weak self] frame in self?.receive(frame) },
+                                   onState: { [weak self] state in self?.connectionChanged(state) })
+        reader = input
+        input.start()
+        stateLabel?.stringValue = "正在连接平板输入通道"
         writeStatus()
     }
 
@@ -160,10 +151,11 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // 合并短时间内的计数更新，磁盘操作不进入输入回调。
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             self.statusQueued = false
-            let value: [String: Any] = ["version": "0.2.1", "pid": ProcessInfo.processInfo.processIdentifier,
-                "permission": AXIsProcessTrusted(), "keyboard_tap": self.keyTap != nil,
-                "scroll_tap": self.tap != nil, "received_actions": self.receivedActions,
-                "finished_actions": self.finishedActions, "cancelled_commands": self.cancelledCommands]
+            let value: [String: Any] = ["version": "0.3.0", "pid": ProcessInfo.processInfo.processIdentifier,
+                "permission": AXIsProcessTrusted(), "keyboard_tap": false,
+                "scroll_tap": self.tap != nil, "connection": self.connection,
+                "received_actions": self.receivedActions, "finished_actions": self.finishedActions,
+                "received_scroll": self.receivedScroll, "rejected_frames": self.rejectedFrames]
             self.statusWriter.async {
                 try? FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
                 if let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) {
@@ -173,49 +165,62 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func handleKey(_ type: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {
-        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if let keyTap, AXIsProcessTrusted() { CGEvent.tapEnable(tap: keyTap, enable: true) }
-            return Unmanaged.passUnretained(event)
+    private func connectionChanged(_ state: String) {
+        connection = state
+        if state != "connected" {
+            nativeScroll.reset()
+            cancelHorizontalNavigation()
+            inputClock = InputClock()
+            pendingActions.removeAll()
         }
-        guard event.getIntegerValueField(.eventSourceUserData) != bridgeMarker,
-              isUU(pid_t(event.getIntegerValueField(.eventSourceUnixProcessID))) else {
-            return Unmanaged.passUnretained(event)
+        stateLabel?.stringValue = "输入通道：\(state)"
+        writeStatus()
+    }
+
+    private func receive(_ frame: InputFrame) {
+        guard inputClock.accepts(frame, now: ProcessInfo.processInfo.systemUptime) else {
+            rejectedFrames += 1
+            nativeScroll.reset()
+            return
         }
-        let key = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
-        let now = ProcessInfo.processInfo.systemUptime
-        if type == .keyUp {
-            let result = commandState.release(key: key, flags: event.flags, at: now)
-            if result.consumed {
-                if let action = result.action { enqueue(action) }
-                else { cancelledCommands += 1 }
+        if connection != "connected" { connectionChanged("connected") }
+        switch frame.t {
+        case "action":
+            nativeScroll.reset()
+            if let action = frame.a {
+                receivedActions[action, default: 0] += 1
+                enqueue(action)
                 writeStatus()
-                return nil
             }
+        case "scroll":
+            cancelHorizontalNavigation()
+            nativeScroll.receive(frame)
+            receivedScroll += 1
+            let now = ProcessInfo.processInfo.systemUptime
+            if now - lastStatusUpdate > 1 || frame.phase == "ended" || frame.phase == "momentum-ended" {
+                lastStatusUpdate = now
+                writeStatus()
+            }
+        case "reset":
+            nativeScroll.reset()
+            cancelHorizontalNavigation()
+            pendingActions.removeAll()
+        default: break
         }
-        guard type == .keyDown,
-              let action = CommandProtocol.action(key: key, flags: event.flags, fromUU: true) else {
-            return Unmanaged.passUnretained(event)
-        }
-        if commandState.press(key: key, action: action, at: now) {
-            finishScroll()
-            receivedActions[action, default: 0] += 1
-            writeStatus()
-        }
-        return nil
     }
 
     private func enqueue(_ action: String) {
         // 慢速显示器接口执行期间，重复请求最多保留一项，抬手后不会消化长队列。
-        guard pendingActions.count < 8, !pendingActions.contains(action) else { return }
-        pendingActions.append(action)
+        guard pendingActions.count < 8, !pendingActions.contains(where: { $0.action == action }) else { return }
+        pendingActions.append((action, ProcessInfo.processInfo.systemUptime + 0.35))
         drainActions()
     }
 
     private func drainActions() {
+        pendingActions.removeAll { $0.deadline < ProcessInfo.processInfo.systemUptime }
         guard !actionBusy, !pendingActions.isEmpty else { return }
         actionBusy = true
-        let action = pendingActions.removeFirst()
+        let action = pendingActions.removeFirst().action
         let work = {
             let result = executeControl(action)
             DispatchQueue.main.async {
@@ -228,7 +233,8 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.drainActions()
             }
         }
-        if action.hasPrefix("navigate-") || ["launchpad", "assistant", "screenshot"].contains(action) {
+        if action.hasPrefix("navigate-") || action.hasPrefix("space-")
+                || ["launchpad", "assistant", "screenshot", "windows", "app-windows"].contains(action) {
             DispatchQueue.main.async(execute: work)
         } else {
             actions.async(execute: work)
@@ -302,10 +308,12 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let source = source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         tap = nil
         source = nil
-        if let keyTap { CGEvent.tapEnable(tap: keyTap, enable: false); CFMachPortInvalidate(keyTap) }
-        if let keySource { CFRunLoopRemoveSource(CFRunLoopGetMain(), keySource, .commonModes) }
-        keyTap = nil; keySource = nil
-        commandState.reset(); pendingActions.removeAll()
+        reader?.stop(); reader = nil
+        nativeScroll.reset()
+        cancelHorizontalNavigation()
+        inputClock = InputClock()
+        connection = "stopped"
+        pendingActions.removeAll()
         stateLabel?.stringValue = "已暂停"
     }
     @objc private func quit() { pause(); NSApp.terminate(nil) }

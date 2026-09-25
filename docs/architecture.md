@@ -14,47 +14,55 @@ UU 前台的物理布局为：原 Ctrl → 按住式 Fn；原语音 → Control�
 
 普通长按放行系统已有的 repeatCount；不合成定时连发，不提前发送 KeyUp。修饰键、静音切换、睡眠等不重复执行。
 
-## 统一 Mac 控制通道
+## 独立输入通道
 
-Fn 功能和手势复用 UU 键盘消息。约定控制组合是 **Control＋Option＋Command** 加以下键：
+0.11.0 / Helper 0.3.0 起，滚动、Fn 功能和手势动作不再伪装成键盘组合。Mac 不安装键盘拦截器，Control＋Option＋Command＋空格等用户组合完整留给 UU 和原应用。普通打字、鼠标移动、点击、拖拽仍由 UU 传输。
 
-| 约定键 | 动作 |
-| --- | --- |
-| F1 / F2 | 当前 Mac 显示器亮度减 / 加 |
-| F3 | 麦克风静音切换 |
-| F4 | 打开系统截屏工具 |
-| F5 | 打开 Siri |
-| F6 | Mac 睡眠 |
-| F7 / F8 / F9 | 上一曲 / 播放暂停 / 下一曲 |
-| F10 / F11 / F12 | 输出静音 / 音量减 / 音量加 |
-| 左 / 右方向键 | 一次后退 / 前进 |
-| 空格 | 打开 Launchpad |
+```text
+实体键盘/触控板
+  → 系统按键路由 / UU 作用域插件
+  → UU 私有 FIFO（0600，零字节文件）
+  → 已配对的 ADB TLS 连接
+  → 一个 Pad Mac Helper
+      ├─ 像素滚动 + 开始/结束/惯性阶段
+      └─ 固定功能动作
+```
 
-平板只补上尚未按住的修饰键，先发送动作键 Down，随后释放自己补上的修饰键，最后发送动作键 Up。Mac 在 Down 时登记动作，只有 Up 到达且控制修饰位已清空才执行，超过两秒或缺少完整配对则取消；这样不会带着 Option 打开 Launchpad 的图标编辑模式。Mac 只消费来自 `/Applications/UURemote.app/Contents/Helpers/UURemoteServer` 的上述组合，普通键盘事件直接通过，不记录输入文字。旧的按需 `Controls.app` 和 LaunchApp 控制协议不再使用。
+Mac 主动建立读取连接，平板不需要知道 Mac 的 IP。优先寻找已连接且 `ro.serialno` 匹配的设备，再尝试配置地址，最后尝试该设备的 `_adb-tls-connect._tcp` 自动发现。发现成功会记住新地址。设备身份与网络地址分开保存，不依赖写死的网段或主机地址；跨网段不保证 mDNS 可见，也不保证网络允许直连。
 
-统一 App 在 session 阶段识别控制键，在 annotated-session 阶段适配滚动。两个事件入口属于同一个进程、同一套权限。耗时亮度调用在工作队列执行，重复动作的待执行队列有界。
+`connection.json` 独立于输入协议，支持主机名、IPv4 和 IPv6 地址格式。未来可以配置 Tailscale 地址或 MagicDNS 名称。**当前固定 23333 模块只转发 Wi-Fi 接口的 IPv4 地址**；接入 VPN 时还需验证 Android VPN 入站路由与原生 TLS 监听，并有针对性地配置转发，不能只改成 VPN 地址就声称已支持。本版不安装 VPN、不扩大当前监听范围。
 
-音量和静音使用 CoreAudio；亮度使用已有 BetterDisplay，虚拟屏对应软件亮度。上一曲等使用原生媒体事件。功能只在用户实际触发时执行，不自动测试睡眠。
+输入协议为一行一个 JSON，版本 `v=1`。只接受固定动作、像素滚动、修饰状态、心跳和重置；没有任意命令或文字输入。普通键盘流以后若迁移，应新增独立消息类型和按下/松开所有权管理，不复用控制动作。
+
+- 每行最多 4096 字节，FIFO 非阻塞写入；背压或断开时丢弃，不堆积历史动作。
+- 单读者文件锁防止两个重连进程分食 FIFO。Android mksh 必须显式传递锁文件描述符，实机已验证。
+- 1 秒心跳不落盘；Mac 4 秒无数据即结束读取并重试。连接身份重新核对，只有握手后的新鲜消息可执行，超过 350 毫秒的积压消息丢弃。
+- 退出 UU 远控或断开通道时终止滚动，取消待执行动作。普通键盘继续由 UU 处理。独立通道不可用时，手势与 Fn 不回退为隐蔽的键盘组合。
+
+音量和静音使用 CoreAudio；亮度调用已有 BetterDisplay，虚拟屏对应软件亮度。上一曲等使用媒体事件；Launchpad 通过系统应用入口打开。慢速动作在工作队列执行，队列有界且过期取消。正常操作不自动测试睡眠。
 
 ## 双指与三指
 
-- 纵向保持 0.25 倍率、强度 4 的速度相关惯性。
-- 横向方向明确且位移达到 2 毫米时提交一次动作，同次落指继续移动不追加翻页，没有横向惯性；阈值用于过滤落指抖动。
-- 浏览器的历史导航使用 Command＋方向键，Launchpad 同样提交整页方向操作。其它区域退回一次短促横向滚动，明确发送结束阶段，不等待静止超时。
-- 通知区域保留一次短促横滑路径，最终清除效果仍需实机确认。
-- 三指直接滑动导航；停留约 300 毫秒再移动拖拽；收拢调用统一 App 打开 Launchpad。
+- 纵向保留 0.25 倍率、强度 4 的速度相关惯性，直接生成像素滚动事件，标明接触阶段和惯性阶段。事件使用独立来源，修饰位来自真实键盘状态，不继承 UU 缓存的 Option/Command。
+- Mos 保持原配置。带滚动阶段和计数标记的事件由 Mos 识别为触控滚动，避免再次平滑和加速。
+- 横向位移达到 2 毫米且方向明确后，发送一次 80 毫秒的原生横向滚动序列，含 began、changed、ended；没有键盘组合，没有横向惯性。
+- 浏览器、Launchpad、通知是否接受这些原生滚动事件需分别实测。Chromium 会区分 NSTouch 和无 NSTouch 的 Magic Mouse 路径，不能只发方向键或一个没有阶段的滚轮事件就称为原生触控。
+- 三指直接滑动导航；停留约 300 毫秒后移动拖拽；收拢调用统一 App 打开 Launchpad。
+- 三指上滑打开 Mission Control。左右切换 Spaces 和下滑显示应用窗口暂用 Mac 端的系统快捷入口，事件完整配对且跳过真实修饰键被按住的情况。
 
-导航不是对原生多点触控协议的仿真，系统自身的切换动画仍由 macOS 控制。
+本方案不是一个虚拟多点 HID 设备。像素滚动与阶段是原生事件，但部分系统导航仍是等效动作，并不具备真实触控板全部跟手动画。现成 Karabiner DriverKit 项目主要提供键盘/鼠标；完整多点设备仍需另行研究驱动、签名与系统支持，不为此降低系统安全设置。
 
 ## 数据与诊断
 
 平板配置位于 UU 私有目录的 `pad_uu_touchpad.json`。`trace=false` 为正常状态。系统 Fn 诊断由临时属性 `debug.pad.uu.trace` 控制，每次系统模块加载最多 80 条，默认关闭，重启不保留。
 
-Mac 只覆盖 `~/Library/Application Support/Pad UU/helper-status.json` 和 `last-action.json`，以及必要的静音恢复值；没有追加日志。状态文件包含固定动作的接收、执行计数，最多十五种，不记录普通按键；写盘异步合并，避开输入回调。源码、测试和脚本进入 Git；设备地址、签名密钥、备份和采样留在被忽略的 `.local`。
+Mac 只覆盖 `~/Library/Application Support/Pad UU/helper-status.json` 和 `last-action.json`，以及必要的静音恢复值。连接配置单独保存，不追加日志。固定动作计数和滚动计数不记录文字，写盘合并并避开输入回调。源码、测试和脚本进入 Git；设备地址、签名密钥、备份和临时采样留在被忽略的 `.local`。
 
 ## 参考
 
-- [Chrome 官方快捷键说明](https://support.google.com/chrome/answer/157179)：Mac 历史前进、后退的 Command＋方向键。
-- [Apple NSWorkspace.OpenConfiguration](https://developer.apple.com/documentation/appkit/nsworkspace/openconfiguration)：启动参数针对新的应用实例，不把重新启动常驻 App 当作命令传输通道。
-- [Apple CGScrollPhase](https://developer.apple.com/documentation/coregraphics/cgscrollphase)：滚动结束阶段。
-- [Android 原生无线 ADB](https://android.googlesource.com/platform/packages/modules/adb/+/HEAD/docs/dev/adb_wifi.md)：固定 23333 转发仍使用原生 TLS 认证。
+- [Android 原生无线 ADB](https://android.googlesource.com/platform/packages/modules/adb/+/HEAD/docs/dev/adb_wifi.md)：TLS、配对和 mDNS。
+- [Apple CGScrollPhase](https://developer.apple.com/documentation/coregraphics/cgscrollphase)：原生滚动阶段。
+- [Chromium 历史导航实现](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/chrome/browser/renderer_host/chrome_render_widget_host_view_mac_history_swiper.mm)：触摸事件与 Magic Mouse 滚动路径。
+- [Mos 4.2.1 ScrollEvent](https://github.com/Caldis/Mos/blob/4.2.1/Mos/ScrollCore/ScrollEvent.swift)：滚动阶段和计数标记的分类。
+- [Karabiner DriverKit VirtualHIDDevice](https://github.com/pqrs-org/Karabiner-DriverKit-VirtualHIDDevice)：虚拟键盘/鼠标与 DriverKit 部署要求。
+- [Tailscale MagicDNS](https://tailscale.com/docs/features/magicdns)：未来连接地址的域名解析。
