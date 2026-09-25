@@ -47,6 +47,10 @@ public final class FunctionRoutes {
     }
 
     public static int index(int scan) {
+        // 蓝牙接口也会直接上报标准 F 键，不能只识别 Pogo 的多媒体扫描码。
+        if (scan >= 59 && scan <= 68) return scan - 58;
+        if (scan == 87) return 11;
+        if (scan == 88) return 12;
         switch (scan) {
             case 224:
             case 191: return 1;

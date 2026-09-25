@@ -28,7 +28,8 @@ if build.exists():
 for p in [build / "classes", build / "dex", build / "tests"]:
     p.mkdir(parents=True, exist_ok=True)
 env = dict(os.environ, JAVA_HOME=str(java.parent), PATH=str(java) + os.pathsep + os.environ["PATH"])
-env.setdefault("PAD_KEYSTORE_PASSWORD", (ROOT / ".local/signing/store-password").read_text().strip())
+if "PAD_KEYSTORE_PASSWORD" not in env:
+    env["PAD_KEYSTORE_PASSWORD"] = (ROOT / ".local/signing/store-password").read_text().strip()
 
 
 def run(*command):
@@ -55,7 +56,8 @@ run(tools / "zipalign", "-f", "4", build / "unsigned.apk", build / "aligned.apk"
 version = ET.parse(base / "AndroidManifest.xml").getroot().get("{http://schemas.android.com/apk/res/android}versionName")
 output = build / f"{args.module}-{version}.apk"
 run(tools / "apksigner", "sign", "--ks", keystore, "--ks-key-alias", "pad-uu",
-    "--ks-pass", "env:PAD_KEYSTORE_PASSWORD", "--out", output, build / "aligned.apk")
+    "--ks-pass", "env:PAD_KEYSTORE_PASSWORD", "--v4-signing-enabled", "false",
+    "--out", output, build / "aligned.apk")
 run(tools / "apksigner", "verify", "--verbose", output)
 print(output)
 print("SHA-256:", hashlib.sha256(output.read_bytes()).hexdigest())

@@ -2,7 +2,7 @@ import AppKit
 import ApplicationServices
 import CoreAudio
 
-// 仅响应明确的功能动作，执行后退出；不安装事件监听器，也不读取输入文字。
+// 功能动作由统一 App 调用，不启动第二个辅助 App，也不读取输入文字。
 enum ControlError: Error, CustomStringConvertible {
     case failed(String)
     var description: String { switch self { case let .failed(message): return message } }
@@ -143,45 +143,41 @@ func openApplication(_ path: String) throws {
     guard NSWorkspace.shared.open(URL(fileURLWithPath: path)) else { throw ControlError.failed("无法打开系统应用") }
 }
 
-let action = CommandLine.arguments.dropFirst().first ?? "check"
-var result: [String: Any] = ["action": action, "timestamp": Date().timeIntervalSince1970,
-                           "media_permission": AXIsProcessTrusted()]
-do {
-    try FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true,
-                                            attributes: [.posixPermissions: 0o700])
-    switch action {
-    case "volume-up": result["volume"] = try volume(1.0 / 16)
-    case "volume-down": result["volume"] = try volume(-1.0 / 16)
-    case "mute": result["muted"] = try toggleMute(input: false)
-    case "mic-mute": result["muted"] = try toggleMute(input: true)
-    case "brightness-up": result["brightness"] = try brightness(1.0 / 16)
-    case "brightness-down": result["brightness"] = try brightness(-1.0 / 16)
-    case "previous": try mediaKey(18)
-    case "play-pause": try mediaKey(16)
-    case "next": try mediaKey(17)
-    case "screenshot": try openApplication("/System/Applications/Utilities/Screenshot.app")
-    case "assistant": try openApplication("/System/Applications/Siri.app")
-    case "sleep": _ = try run(URL(fileURLWithPath: "/usr/bin/pmset"), ["sleepnow"])
-    case "check":
-        let device = try audioDevice(input: false)
-        result["output_device"] = device
-        result["volume_channels"] = try channels(device, kAudioDevicePropertyScopeOutput)
-        result["output_volume"] = try channels(device, kAudioDevicePropertyScopeOutput).map {
-            try readValue(device, address(kAudioDevicePropertyVolumeScalar, kAudioDevicePropertyScopeOutput, $0), Float(0))
+func executeControl(_ action: String) -> [String: Any] {
+    var result: [String: Any] = ["action": action, "timestamp": Date().timeIntervalSince1970,
+                               "media_permission": AXIsProcessTrusted()]
+    do {
+        try FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        switch action {
+        case "volume-up": result["volume"] = try volume(1.0 / 16)
+        case "volume-down": result["volume"] = try volume(-1.0 / 16)
+        case "mute": result["muted"] = try toggleMute(input: false)
+        case "mic-mute": result["muted"] = try toggleMute(input: true)
+        case "brightness-up": result["brightness"] = try brightness(1.0 / 16)
+        case "brightness-down": result["brightness"] = try brightness(-1.0 / 16)
+        case "previous": try mediaKey(18)
+        case "play-pause": try mediaKey(16)
+        case "next": try mediaKey(17)
+        case "screenshot": try openApplication("/System/Applications/Utilities/Screenshot.app")
+        case "assistant": try openApplication("/System/Applications/Siri.app")
+        case "launchpad": try openApplication("/System/Applications/Launchpad.app")
+        case "navigate-back", "navigate-forward":
+            result["navigation"] = try navigate(back: action == "navigate-back")
+        case "sleep": _ = try run(URL(fileURLWithPath: "/usr/bin/pmset"), ["sleepnow"])
+        case "check":
+            let device = try audioDevice(input: false)
+            result["output_volume"] = try channels(device, kAudioDevicePropertyScopeOutput).map {
+                try readValue(device, address(kAudioDevicePropertyVolumeScalar, kAudioDevicePropertyScopeOutput, $0), Float(0))
+            }
+        default: throw ControlError.failed("未指定受支持的动作")
         }
-    case "verify":
-        // 用原值往返验证实际系统接口，不改变音量、静音状态或亮度。
-        result["volume"] = try volume(0)
-        result["brightness"] = try brightness(0)
-    default: throw ControlError.failed("未指定受支持的动作")
+        result["ok"] = true
+    } catch {
+        result["ok"] = false; result["error"] = String(describing: error)
     }
-    result["ok"] = true
-} catch {
-    result["ok"] = false; result["error"] = String(describing: error)
+    if let data = try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]) {
+        try? data.write(to: supportDirectory.appendingPathComponent("last-action.json"), options: .atomic)
+    }
+    return result
 }
-// 状态仅覆盖一个小文件，不生成持续追加的日志。
-if let data = try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]) {
-    try? data.write(to: supportDirectory.appendingPathComponent("last-action.json"), options: .atomic)
-    if action == "check" || action == "verify" { print(String(data: data, encoding: .utf8)!) }
-}
-exit(result["ok"] as? Bool == true ? 0 : 1)

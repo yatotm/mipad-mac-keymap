@@ -27,6 +27,12 @@ public final class FunctionRoutesTest {
         check(routes.record("ignored-chord", false, LOCAL) == IGNORE);
         int[] scans = {224, 225, 190, 99, 194, 193, 165, 164, 163, 113, 114, 115};
         for (int i = 0; i < scans.length; i++) check(FunctionRoutes.index(scans[i]) == i + 1);
+        int[] standard = {59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 87, 88};
+        for (int i = 0; i < standard.length; i++) {
+            check(FunctionRoutes.index(standard[i]) == i + 1);
+            check(FunctionRoutes.macFunctionKeyCode(FunctionRoutes.index(standard[i]), 0)
+                    == FunctionRoutes.macFunctionKeyCode(FunctionRoutes.index(scans[i]), 0));
+        }
         check(FunctionRoutes.index(1) == 0);   // Esc 保持原样。
         check(FunctionRoutes.index(111) == 0); // Delete 保持原样。
         check(FunctionRoutes.index(192) == 0); // Fn 自身不作为 F 键发送。

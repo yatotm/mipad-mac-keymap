@@ -22,14 +22,15 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
     private static final int PASS_TO_USER = 0x40000000;
     private final FunctionRoutes routes = new FunctionRoutes();
     private final FunctionRoutes modifierRoutes = new FunctionRoutes();
-    private final HeldFn[] fn = {new HeldFn(), new HeldFn()};
+    private final HeldFn fn = new HeldFn();
     private volatile boolean uuFocused;
-    private volatile int fnPogo = -1;
-    private volatile int fnBluetooth = -1;
+    private volatile int fnDevice = -1;
     private Method windowOwner;
     private Field keyField;
     private Field metaField;
     private Field deviceField;
+    private Class<?> properties;
+    private int traceBudget = 80;
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam param) throws Throwable {
@@ -40,6 +41,7 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
             return;
         }
         ClassLoader loader = param.classLoader;
+        properties = XposedHelpers.findClass("android.os.SystemProperties", loader);
         Class<?> policy = XposedHelpers.findClass(
                 "com.android.server.policy.BaseMiuiPhoneWindowManager", loader);
         Class<?> intercept = XposedHelpers.findClass(
@@ -66,8 +68,7 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
                 @Override protected void afterHookedMethod(MethodHookParam p) throws Throwable {
                     uuFocused = isUuWindow(p.args[0]);
                     if (!uuFocused) {
-                        fn[0].cancel();
-                        fn[1].cancel();
+                        fn.cancel();
                     }
                 }
             }));
@@ -79,7 +80,7 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
             for (XC_MethodHook.Unhook hook : installed) hook.unhook();
             throw error;
         }
-        Log.i(TAG, "v1.5 已加载：按住左下角 Fn 使用远端功能层，松开恢复 F1–F12");
+        Log.i(TAG, "v1.7 已加载：同一键盘跨接口共享 Fn，桥接顶排前的短暂释放帧");
     }
 
     private boolean isUuWindow(Object window) throws Exception {
@@ -110,12 +111,11 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
                 && device.getKeyboardType() == InputDevice.KEYBOARD_TYPE_ALPHABETIC;
     }
 
-    private void checkFnDevice(int group) {
-        int id = group == 0 ? fnPogo : fnBluetooth;
+    private void checkFnDevice() {
+        int id = fnDevice;
         if (id >= 0 && InputDevice.getDevice(id) == null) {
-            fn[group].reset();
-            if (group == 0) fnPogo = -1;
-            else fnBluetooth = -1;
+            fn.reset();
+            fnDevice = -1;
         }
     }
 
@@ -131,6 +131,14 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
         metaField.setInt(mapped, meta);
         deviceField.setInt(mapped, device);
         return mapped;
+    }
+
+    private void traceFn(KeyEvent event, int group, int mode) {
+        if (traceBudget <= 0 || !(Boolean) XposedHelpers.callStaticMethod(properties,
+                "getBoolean", "debug.pad.uu.trace", false)) return;
+        traceBudget--;
+        Log.i(TAG, "Fn诊断 time=" + event.getEventTime() + " scan=" + event.getScanCode() + " action=" + event.getAction()
+                + " meta=" + event.getMetaState() + " group=" + group + " route=" + mode);
     }
 
     private abstract static class GuardedHook extends XC_MethodHook {
@@ -150,13 +158,14 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
 
     private final class QueueHook extends GuardedHook {
         private boolean announced;
+        private boolean functionAnnounced;
         private boolean localAnnounced;
         private boolean ignoredAnnounced;
         @Override protected void apply(MethodHookParam p) throws Throwable {
             KeyEvent event = (KeyEvent) p.args[0];
             int group = family(event);
             if (group < 0) return;
-            checkFnDevice(group);
+            checkFnDevice();
             boolean down = event.getAction() == KeyEvent.ACTION_DOWN;
             if (event.getAction() != KeyEvent.ACTION_DOWN
                     && event.getAction() != KeyEvent.ACTION_UP) return;
@@ -175,12 +184,12 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
                 if (modifierMode != FunctionRoutes.IGNORE) return;
                 // Fn 只选择功能层，不作为独立按键发往 Mac。
                 if (down) {
-                    if (group == 0) fnPogo = event.getDeviceId();
-                    else fnBluetooth = event.getDeviceId();
-                    fn[group].press();
+                    fnDevice = event.getDeviceId();
+                    fn.press();
                 } else {
-                    fn[group].release();
+                    fn.release(event.getEventTime());
                 }
+                traceFn(event, group, fn.rowDown(true, event.getEventTime()));
                 p.setResult(0);
                 return;
             }
@@ -191,9 +200,10 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
             String key = stroke(group, event);
             int mode = routes.mode(key);
             if (mode < 0 && down) {
-                mode = fn[group].rowDown(uuFocused && (Boolean) p.args[2]);
+                mode = fn.rowDown(uuFocused && (Boolean) p.args[2], event.getEventTime());
             }
             mode = routes.record(key, down, mode);
+            traceFn(event, group, mode);
             if (mode == FunctionRoutes.IGNORE) {
                 p.setResult(0);
                 if (!ignoredAnnounced) {
@@ -209,12 +219,18 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
                     announced = true;
                     Log.i(TAG, "顶排已直通远端，Fn 功能不再交给平板系统");
                 }
+                if (mode == FunctionRoutes.REMOTE_FUNCTION && !functionAnnounced) {
+                    functionAnnounced = true;
+                    Log.i(TAG, "Fn 功能层已命中，接口=" + group + " 扫描码=" + scan);
+                }
                 return;
             }
             if (uuFocused && !localAnnounced) {
                 localAnnounced = true;
                 Log.i(TAG, "保留切入 UU 前已按下的平板功能键路由");
             }
+            // 新增的标准 F 键路径在 UU 外保留原始系统处理。
+            if ((scan >= 59 && scan <= 68) || scan == 87 || scan == 88) return;
             // 按物理功能位置恢复原厂键码，不让系统再次解释已经处理过的 Fn 修饰。
             int stock = FunctionRoutes.stockKeyCode(index, event.getKeyCode());
             int meta = event.getMetaState() & ~KeyEvent.META_FUNCTION_ON;

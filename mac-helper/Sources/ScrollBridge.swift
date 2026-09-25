@@ -23,6 +23,18 @@ struct ScrollPhaseState {
 final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
+    private var keyTap: CFMachPort?
+    private var keySource: CFRunLoopSource?
+    private var commandState = CommandState()
+    private var receivedActions: [String: Int] = [:]
+    private var finishedActions: [String: Int] = [:]
+    private var cancelledCommands = 0
+    private let statusWriter = DispatchQueue(label: "local.pad.uu.status", qos: .utility)
+    private var statusQueued = false
+    private let actions = DispatchQueue(label: "local.pad.uu.controls", qos: .userInitiated)
+    private var pendingActions: [String] = []
+    private var actionBusy = false
+    private var commandCount = 0
     private var status: NSStatusItem?
     private var summary: NSMenuItem?
     private var phaseState = ScrollPhaseState()
@@ -39,7 +51,7 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.title = "UU↕"
+        item.button?.title = "Pad"
         let menu = NSMenu()
         menu.delegate = self
         let line = NSMenuItem(title: "尚未启用", action: nil, keyEquivalent: "")
@@ -55,18 +67,18 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.menu = menu
         status = item
         if !CommandLine.arguments.contains("--background") { showWindow() }
-        if AXIsProcessTrusted() { enable() } else { waitForPermission() }
+        if AXIsProcessTrusted() { enable() } else { waitForPermission(); writeStatus() }
     }
 
     private func showWindow() {
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 260),
                          styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        w.title = "UU 滚动适配"
-        let title = NSTextField(labelWithString: "UU 滚动适配")
+        w.title = "Pad Mac Helper"
+        let title = NSTextField(labelWithString: "Pad Mac Helper")
         title.font = .boldSystemFont(ofSize: 22)
         title.frame = NSRect(x: 24, y: 205, width: 470, height: 32)
         let info = NSTextField(wrappingLabelWithString:
-            "只修正 UU 传来的滚动，本地鼠标继续使用 Mos 原有设置。\n需要在系统的辅助功能权限列表中允许此程序。")
+            "统一处理 UU 的功能控制、导航和滚动适配。\n只识别约定控制组合，不记录普通键盘输入。")
         info.frame = NSRect(x: 24, y: 128, width: 470, height: 62)
         let label = NSTextField(labelWithString: "等待辅助功能权限")
         label.frame = NSRect(x: 24, y: 92, width: 470, height: 28)
@@ -89,7 +101,7 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func menuWillOpen(_ menu: NSMenu) {
-        summary?.title = tap != nil ? "已处理 \(count) 次 UU 滚动" : "未启用：需辅助功能权限"
+        summary?.title = tap != nil && keyTap != nil ? "滚动 \(count) 次 · 控制 \(commandCount) 次" : "未启用：需辅助功能权限"
     }
 
     @objc private func openSettings() {
@@ -123,7 +135,104 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: port, enable: true)
         summary?.title = "UU 滚动适配已启用"
-        stateLabel?.stringValue = "已启用：仅处理 UU 滚动"
+        let keyCallback: CGEventTapCallBack = { _, type, event, pointer in
+            guard let pointer else { return Unmanaged.passUnretained(event) }
+            return Unmanaged<Bridge>.fromOpaque(pointer).takeUnretainedValue().handleKey(type, event)
+        }
+        let keyMask = (CGEventMask(1) << CGEventType.keyDown.rawValue) | (CGEventMask(1) << CGEventType.keyUp.rawValue)
+        guard let keyboard = CGEvent.tapCreate(tap: .cgSessionEventTap,
+                place: .headInsertEventTap, options: .defaultTap, eventsOfInterest: keyMask,
+                callback: keyCallback, userInfo: Unmanaged.passUnretained(self).toOpaque()) else {
+            pause(); stateLabel?.stringValue = "无法建立功能控制入口，请检查权限"; writeStatus()
+            return
+        }
+        keyTap = keyboard
+        keySource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, keyboard, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), keySource, .commonModes)
+        CGEvent.tapEnable(tap: keyboard, enable: true)
+        stateLabel?.stringValue = "已启用：UU 控制与滚动适配"
+        writeStatus()
+    }
+
+    private func writeStatus() {
+        guard !statusQueued else { return }
+        statusQueued = true
+        // 合并短时间内的计数更新，磁盘操作不进入输入回调。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            self.statusQueued = false
+            let value: [String: Any] = ["version": "0.2.1", "pid": ProcessInfo.processInfo.processIdentifier,
+                "permission": AXIsProcessTrusted(), "keyboard_tap": self.keyTap != nil,
+                "scroll_tap": self.tap != nil, "received_actions": self.receivedActions,
+                "finished_actions": self.finishedActions, "cancelled_commands": self.cancelledCommands]
+            self.statusWriter.async {
+                try? FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
+                if let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) {
+                    try? data.write(to: supportDirectory.appendingPathComponent("helper-status.json"), options: .atomic)
+                }
+            }
+        }
+    }
+
+    private func handleKey(_ type: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let keyTap, AXIsProcessTrusted() { CGEvent.tapEnable(tap: keyTap, enable: true) }
+            return Unmanaged.passUnretained(event)
+        }
+        guard event.getIntegerValueField(.eventSourceUserData) != bridgeMarker,
+              isUU(pid_t(event.getIntegerValueField(.eventSourceUnixProcessID))) else {
+            return Unmanaged.passUnretained(event)
+        }
+        let key = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+        let now = ProcessInfo.processInfo.systemUptime
+        if type == .keyUp {
+            let result = commandState.release(key: key, flags: event.flags, at: now)
+            if result.consumed {
+                if let action = result.action { enqueue(action) }
+                else { cancelledCommands += 1 }
+                writeStatus()
+                return nil
+            }
+        }
+        guard type == .keyDown,
+              let action = CommandProtocol.action(key: key, flags: event.flags, fromUU: true) else {
+            return Unmanaged.passUnretained(event)
+        }
+        if commandState.press(key: key, action: action, at: now) {
+            finishScroll()
+            receivedActions[action, default: 0] += 1
+            writeStatus()
+        }
+        return nil
+    }
+
+    private func enqueue(_ action: String) {
+        // 慢速显示器接口执行期间，重复请求最多保留一项，抬手后不会消化长队列。
+        guard pendingActions.count < 8, !pendingActions.contains(action) else { return }
+        pendingActions.append(action)
+        drainActions()
+    }
+
+    private func drainActions() {
+        guard !actionBusy, !pendingActions.isEmpty else { return }
+        actionBusy = true
+        let action = pendingActions.removeFirst()
+        let work = {
+            let result = executeControl(action)
+            DispatchQueue.main.async {
+                self.commandCount += 1
+                self.finishedActions[action, default: 0] += 1
+                self.writeStatus()
+                self.stateLabel?.stringValue = result["ok"] as? Bool == true
+                    ? "已执行：\(action)" : "动作失败：\(result["error"] ?? "未知错误")"
+                self.actionBusy = false
+                self.drainActions()
+            }
+        }
+        if action.hasPrefix("navigate-") || ["launchpad", "assistant", "screenshot"].contains(action) {
+            DispatchQueue.main.async(execute: work)
+        } else {
+            actions.async(execute: work)
+        }
     }
 
     private func isUU(_ pid: pid_t) -> Bool {
@@ -193,32 +302,12 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let source = source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         tap = nil
         source = nil
+        if let keyTap { CGEvent.tapEnable(tap: keyTap, enable: false); CFMachPortInvalidate(keyTap) }
+        if let keySource { CFRunLoopRemoveSource(CFRunLoopGetMain(), keySource, .commonModes) }
+        keyTap = nil; keySource = nil
+        commandState.reset(); pendingActions.removeAll()
         stateLabel?.stringValue = "已暂停"
     }
     @objc private func quit() { pause(); NSApp.terminate(nil) }
     func applicationWillTerminate(_ notification: Notification) { pause() }
-}
-
-if CommandLine.arguments.contains("--self-test") {
-    var phase = ScrollPhaseState()
-    precondition(phase.next() == .began)
-    precondition(phase.next() == .changed)
-    precondition(phase.finish())
-    precondition(!phase.finish())
-    precondition(phase.next() == .began)
-    let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
-                        wheelCount: 2, wheel1: 7, wheel2: -3, wheel3: 0)!
-    let x = event.getDoubleValueField(.scrollWheelEventPointDeltaAxis2)
-    let y = event.getDoubleValueField(.scrollWheelEventPointDeltaAxis1)
-    event.setIntegerValueField(.scrollWheelEventScrollCount, value: 1)
-    event.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(CGScrollPhase.began.rawValue))
-    precondition(event.getDoubleValueField(.scrollWheelEventPointDeltaAxis2) == x)
-    precondition(event.getDoubleValueField(.scrollWheelEventPointDeltaAxis1) == y)
-    print("滚动阶段状态与位移保留检查通过；未安装事件拦截器，未发送输入事件。")
-} else {
-    let app = NSApplication.shared
-    let bridge = Bridge()
-    app.setActivationPolicy(.accessory)
-    app.delegate = bridge
-    app.run()
 }
