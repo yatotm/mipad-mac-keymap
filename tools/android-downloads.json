@@ -1,0 +1,14 @@
+[
+  {
+    "package": "platforms;android-35",
+    "url": "https://dl.google.com/android/repository/platform-35_r02.zip",
+    "size": "64273788",
+    "sha1": "0bb560a90a7a2cbd0dd8348224d518b638fe7949"
+  },
+  {
+    "package": "build-tools;35.0.0",
+    "url": "https://dl.google.com/android/repository/build-tools_r35_macosx.zip",
+    "size": "76857898",
+    "sha1": "93ab8ce91230e067b5add4bfa79919c52b27f072"
+  }
+]

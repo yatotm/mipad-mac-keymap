@@ -1,0 +1,6 @@
+id=pad_adb_tls_23333
+name=Pad 无线 ADB · 固定 23333
+version=1.0
+versionCode=1
+author=Local
+description=开机在已信任 Wi-Fi 上启用原生加密无线调试，将本机 Wi-Fi 的 23333 转接到原生 TLS 端口；保留配对认证，无滚动日志。
