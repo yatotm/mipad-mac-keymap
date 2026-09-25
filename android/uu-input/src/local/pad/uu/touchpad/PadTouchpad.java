@@ -14,6 +14,7 @@ import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import java.io.File;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -43,7 +44,7 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
     private Field motionField, deltaX, deltaY;
     private Constructor<?> motionWrapper;
     private Constructor<?> pointerWrapper;
-    private Method sendCommand, fragmentView, fragmentActivity;
+    private Method sendCommand, horizontal, vertical, fragmentView, fragmentActivity;
     private Method mouseButton, updatePointer;
     private InputPipe inputPipe;
     private File configFile;
@@ -52,6 +53,7 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
     private float scrollScale = 0.25f, swipeMm = 8f, inertiaStrength = 2.5f;
     private int traceBudget = 100, scrollTraceBudget = 32, keyTraceBudget = 100;
     private int momentumTraceBudget = 16;
+    private int functionTraceBudget = 8;
     private Handler handler;
     private boolean scrollAnnounced;
     private boolean repeatAnnounced;
@@ -121,6 +123,8 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
         motionField.setAccessible(true); deltaX.setAccessible(true); deltaY.setAccessible(true);
         motionWrapper = motion.getConstructor(MotionEvent.class);
         sendCommand = fragment.getMethod("H", String.class);
+        horizontal = commands.getMethod("w", int.class);
+        vertical = commands.getMethod("x", int.class);
         mouseButton = commands.getMethod("y", int.class, boolean.class);
         Class<?> pointerEvent = XposedHelpers.findClass("oa.z", loader);
         pointerWrapper = pointerEvent.getConstructor(PointF.class, PointF.class);
@@ -136,6 +140,35 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
         heldKeys.setAccessible(true);
         List<XC_MethodHook.Unhook> hooks = new ArrayList<>();
         try {
+            hooks.add(XposedBridge.hookMethod(XposedHelpers.findClass("com.remote.app.ui.activity.ScreenActivity", loader).getMethod("dispatchKeyEvent", KeyEvent.class), new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam hook) {
+                    if (failed || !enabled || !"com.remote.app.ui.activity.ScreenActivity".equals(hook.thisObject.getClass().getName())) return;
+                    KeyEvent event = (KeyEvent) hook.args[0];
+                    if (!physicalKeyboard(event.getDevice())) return;
+                    String action = macAction(event.getKeyCode());
+                    // 回归定位只记录最多八次功能键按下，不记录字母、数字或文本。
+                    if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0
+                            && (action != null || (event.getKeyCode() >= KeyEvent.KEYCODE_F1
+                            && event.getKeyCode() <= KeyEvent.KEYCODE_F12)) && functionTraceBudget-- > 0) {
+                        Log.i(TAG, "功能入口 code=" + event.getKeyCode() + " scan=" + event.getScanCode()
+                                + " action=" + action);
+                    }
+                    if (action == null) return;
+                    RepeatGate gate = controlGates.computeIfAbsent(hook.thisObject, unused -> new RepeatGate());
+                    if (event.getAction() == KeyEvent.ACTION_UP) gate.release(event.getDeviceId(), event.getKeyCode());
+                    else if (event.getAction() == KeyEvent.ACTION_DOWN
+                            && gate.claimPress(event.getDeviceId(), event.getKeyCode(), event.getDownTime(), event.getRepeatCount())
+                            && (event.getRepeatCount() == 0 || action.startsWith("volume-") || action.startsWith("brightness-"))) {
+                        for (Session session : sessions.values()) stopMomentum(session);
+                        sendControl(action);
+                        if (!controlAnnounced) {
+                            controlAnnounced = true;
+                            Log.i(TAG, "Fn 在远控 Activity 入口已接收");
+                        }
+                    }
+                    hook.setResult(true);
+                }
+            }));
             hooks.add(XposedBridge.hookMethod(keyboard.getMethod("a", KeyEvent.class), new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam hook) {
                     if (failed || !enabled) return;
@@ -256,7 +289,7 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
             throw error;
         }
         loadConfig();
-        Log.i(TAG, "v0.11.0 已加载：Fn和双指手势使用私有输入通道，不发送控制组合键");
+        Log.i(TAG, "v0.11.1 已加载：恢复 UU 滚动与导航路径；Fn 和 Launchpad 保留独立控制");
     }
 
     private void fail(Throwable error) {
@@ -397,22 +430,15 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
     }
 
     private void sendScroll(Object fragment, Session session, float dx, float dy, float factor) throws Exception {
+        // 横向倍率只在输出端应用一次，接触位移与惯性使用相同比例。
         int x = session.scroll.convert(0, dx, factor), y = session.scroll.convert(1, dy, factor);
-        if (x == 0 && y == 0) return;
-        String phase;
-        if (session.inertia != null) {
-            phase = session.momentumActive ? "momentum-changed" : "momentum-began";
-            session.momentumActive = true;
-        } else {
-            phase = session.scrollActive ? "changed" : "began";
-            session.scrollActive = true;
-        }
-        boolean sent = inputPipe.scroll(-x, y, phase);
+        if (x != 0) sendCommand.invoke(fragment, horizontal.invoke(null, x));
+        if (y != 0) sendCommand.invoke(fragment, vertical.invoke(null, y));
         if (!scrollAnnounced) {
             scrollAnnounced = true;
-            Log.i(TAG, "独立滚动已命中：倍率=" + scrollScale + " 发送=" + sent);
+            Log.i(TAG, "触控板滚动适配已命中：反向=" + reverse + " 倍率=" + scrollScale);
         }
-        if (trace && scrollTraceBudget-- > 0) Log.i(TAG, "滚动 " + phase + " x=" + -x + " y=" + y + " 发送=" + sent);
+        if (trace && scrollTraceBudget-- > 0) Log.i(TAG, "滚动 " + dx + "," + dy + " → " + x + "," + y);
     }
 
     private void loadConfig() {
@@ -555,7 +581,7 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
                             stopMomentum(session);
                             if (trace && traceBudget-- > 0) Log.i(TAG, "双指横向提交=" + intent + " meta=" + event.getMetaState());
                             if ((event.getMetaState() & modifiers) == 0) {
-                                sendControl(intent == TwoFingerIntent.RIGHT ? "navigate-back" : "navigate-forward");
+                                horizontalShortcut(hook.thisObject, intent == TwoFingerIntent.RIGHT);
                             }
                         }
                         return;
@@ -616,7 +642,7 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
                                 int result = session.swipe.update(action, count,
                                         x / resolution(event.getDevice(), 0), y / resolution(event.getDevice(), 1),
                                         (event.getMetaState() & modifiers) != 0, swipeMm);
-                                if (result > SwipeState.CONSUME) navigate(result);
+                                if (result > SwipeState.CONSUME) shortcut(hook.thisObject, result);
                                 return;
                             }
                             int drag = session.drag.move(x, y, event.getEventTime(),
@@ -634,7 +660,7 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
                         int result = session.swipe.update(action, count,
                                 x / resolution(event.getDevice(), 0), y / resolution(event.getDevice(), 1),
                                 (event.getMetaState() & modifiers) != 0, swipeMm);
-                        if (result > SwipeState.CONSUME) navigate(result);
+                        if (result > SwipeState.CONSUME) shortcut(hook.thisObject, result);
                     }
                 }
             } catch (Throwable error) { fail(error); }
@@ -671,11 +697,67 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
         }
     }
 
-    private void navigate(int direction) {
-        // 自然方向：手指左滑进入右侧桌面。这里只传动作名称，不触碰 UU 的键盘状态。
-        String action = direction == SwipeState.LEFT ? "space-right"
-                : direction == SwipeState.RIGHT ? "space-left"
-                : direction == SwipeState.UP ? "windows" : "app-windows";
-        sendControl(action);
+    private static View findInput(View view) {
+        if (INPUT_VIEW.equals(view.getClass().getName())) return view;
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                View found = findInput(group.getChildAt(i));
+                if (found != null) return found;
+            }
+        }
+        return null;
+    }
+
+    private void horizontalShortcut(Object fragment, boolean back) throws Exception {
+        Activity activity = (Activity) fragmentActivity.invoke(fragment);
+        View input = findInput(activity.getWindow().getDecorView());
+        int keyboard = -1;
+        for (int id : InputDevice.getDeviceIds()) if (physicalKeyboard(InputDevice.getDevice(id))) { keyboard = id; break; }
+        if (input == null || keyboard < 0) return;
+        int key = back ? KeyEvent.KEYCODE_DPAD_LEFT : KeyEvent.KEYCODE_DPAD_RIGHT;
+        int meta = KeyEvent.META_META_ON | KeyEvent.META_META_LEFT_ON;
+        long time = SystemClock.uptimeMillis();
+        try {
+            dispatch(input, keyboard, time, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_META_LEFT, meta);
+            dispatch(input, keyboard, time, KeyEvent.ACTION_DOWN, key, meta);
+        } finally {
+            try { dispatch(input, keyboard, time, KeyEvent.ACTION_UP, key, meta); }
+            finally { dispatch(input, keyboard, time, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_META_LEFT, 0); }
+        }
+    }
+
+    private void shortcut(Object fragment, int direction) throws Exception {
+        if (direction == SwipeState.UP) { sendControl("windows"); return; }
+        Activity activity = (Activity) fragmentActivity.invoke(fragment);
+        View input = findInput(activity.getWindow().getDecorView());
+        int keyboard = -1;
+        for (int id : InputDevice.getDeviceIds()) {
+            InputDevice device = InputDevice.getDevice(id);
+            if (device != null && device.getKeyboardType() == InputDevice.KEYBOARD_TYPE_ALPHABETIC
+                    && ((device.getVendorId() == 0x15d9 && device.getProductId() == 0x00a3)
+                    || (device.getVendorId() == 0xbf01 && device.getProductId() == 0x0040))) { keyboard = id; break; }
+        }
+        if (input == null || keyboard < 0) { Log.w(TAG, "未找到 UU 输入视图或实体键盘"); return; }
+        // 与 Mac 自然滑动一致：手指左滑进入右侧桌面，反向亦然。
+        int key = direction == SwipeState.LEFT ? KeyEvent.KEYCODE_DPAD_RIGHT
+                : direction == SwipeState.RIGHT ? KeyEvent.KEYCODE_DPAD_LEFT
+                : direction == SwipeState.UP ? KeyEvent.KEYCODE_DPAD_UP : KeyEvent.KEYCODE_DPAD_DOWN;
+        long time = SystemClock.uptimeMillis();
+        int ctrl = KeyEvent.META_CTRL_ON | KeyEvent.META_CTRL_LEFT_ON;
+        boolean accepted = false;
+        try {
+            boolean controlAccepted = dispatch(input, keyboard, time, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_CTRL_LEFT, ctrl);
+            accepted = dispatch(input, keyboard, time, KeyEvent.ACTION_DOWN, key, ctrl) && controlAccepted;
+        } finally {
+            try { dispatch(input, keyboard, time, KeyEvent.ACTION_UP, key, ctrl); }
+            finally { dispatch(input, keyboard, time, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_CTRL_LEFT, 0); }
+        }
+        if (trace && traceBudget-- > 0) Log.i(TAG, "手势=" + direction + " 快捷键=" + key + " UU接收=" + accepted);
+    }
+
+    private static boolean dispatch(View view, int device, long time, int action, int key, int meta) {
+        return view.dispatchKeyEvent(new KeyEvent(time, SystemClock.uptimeMillis(), action, key,
+                0, meta, device, 0, 0, InputDevice.SOURCE_KEYBOARD));
     }
 }

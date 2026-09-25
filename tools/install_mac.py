@@ -48,7 +48,13 @@ executables = [str(target / "Contents/MacOS/PadMacHelper"),
 listing = subprocess.check_output(["ps", "-axo", "pid=,command="], text=True)
 for line in listing.splitlines():
     parts = line.strip().split(None, 1)
-    if len(parts) == 2 and any(parts[1] == p or parts[1].startswith(p + " ") for p in executables):
+    if len(parts) != 2:
+        continue
+    helper = any(parts[1] == p or parts[1].startswith(p + " ") for p in executables)
+    # Foundation 的子进程可能在 Helper 被终止后继续存活，只结束本插件的读取命令。
+    reader = ("/adb -s " in parts[1] and " exec-out su -c 'umask 077; exec 9>" in parts[1]
+              and "/data/user/0/com.netease.uuremote/files/pad_uu_input.pipe 9>&9'" in parts[1])
+    if helper or reader:
         try:
             os.kill(int(parts[0]), signal.SIGTERM)
         except ProcessLookupError:
