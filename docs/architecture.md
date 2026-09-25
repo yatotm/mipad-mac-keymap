@@ -14,9 +14,9 @@ UU 前台的物理布局为：原 Ctrl → 按住式 Fn；原语音 → Control�
 
 普通长按放行系统已有的 repeatCount；不合成定时连发，不提前发送 KeyUp。修饰键、静音切换、睡眠等不重复执行。
 
-## 当前恢复路径（0.11.1）
+## 当前路径（系统 1.8 / UU 0.11.2）
 
-0.11.0 的消息传输和状态检查通过，但实际滚动、导航和 Fn 大量失效。当前撤回没有通过验收的输入投递，按功能分别恢复：
+0.11.0 的消息传输和状态检查通过，但实际滚动、导航和 Fn 大量失效。现已撤回没有通过验收的输入投递，其他功能保留恢复路径，并单独修正 Fn：
 
 | 功能 | 当前路径 |
 | --- | --- |
@@ -26,21 +26,37 @@ UU 前台的物理布局为：原 Ctrl → 按住式 Fn；原语音 → Control�
 | 三指左右切屏、下滑应用窗口 | 恢复经 UU 发送的完整 Control＋方向键序列 |
 | 三指上滑 | ADB 固定动作，Mac 打开 Mission Control |
 | 三指捏合 | ADB 固定动作，Mac 打开 Launchpad |
-| Fn 顶排功能 | 在实际 ScreenActivity 的 dispatchKeyEvent 入口识别，ADB 固定动作调用 Mac 系统接口 |
+| Fn 顶排功能 | 系统识别/还原真实用途，受保护的本机广播交给 UU，再由 ADB 固定动作调用 Mac 系统接口 |
 
 横向与三指方向仍是兼容操作，不代表完整的原生触控板。浏览器前进后退、Launchpad 翻页需要用户回归；通知清除不因恢复快捷操作而自动获得支持。以后继续原生输入实验时，须先证明事件到达远控目标窗口/屏幕，不能只检查发送计数。
 
 Mac 没有键盘拦截器，Control＋Option＋Command＋空格留给用户原功能。滚轮监听仍为 UU 连续滚动补充 Mos 可识别的标记，Mos 配置不变。
 
+## 蓝牙 Fn 的实测根因与修正
+
+实测按住原 Ctrl 时：
+
+- 音量减从普通 Consumer `0xEA` 变成键盘修饰位图 `0xEA`，即左 Shift、左 Meta、右 Shift、右 Alt、右 Meta。
+- 亮度减变成修饰位图 `0x70`，即右 Control、右 Shift、右 Alt。
+- 松开功能键后恢复为 `0x01`（原左 Ctrl）。单按音量减则仍正常上报 Consumer `0xEA` / Linux 扫描码 114，并映射成 F11。
+
+因此，这两个 Fn 组合在普通按键通道中根本不是音量/亮度键。只改 UU 接收入口无法修复。1.8 在指定蓝牙键盘、UU 前台、单独按下原 Ctrl 的范围内还原八种标准 Consumer 用途码；假修饰键的按下和松开在进入安卓/UU 前被消费。其它顶排使用已有位置表识别。
+
+同一报告中的空位图保留所有权，直到不同时间戳的新报告开始，避免先释放左 Ctrl 时过早结束 Fn。报告合并后才提交动作，并检查最后变化方向。音量减释放时的中间位图可能等于 `0xE9`，不能误触发音量加。失焦、取消和设备消失终止功能重复；仅亮度/音量允许按住重复，切换型动作只执行一次。
+
+系统通过限定 UU 包名的本机广播发送固定编号。接收器要求 `INJECT_EVENTS` 发送权限，并检查发送者 UID 1000、协议版本、500 毫秒时效和远控页面前台状态。正常 Fn 和错误报告还原后的 Fn 共用这条控制入口，不再依赖安卓将媒体键投递到自定义输入视图。
+
+此修正属于 Android 系统输入层适配，没有修改键盘固件。普通多修饰键组合、Fn 与额外修饰键混用，以及每个顶排位置的支持边界以实际验证记录为准；不能把两种连接模式或全部 F1–F12 都推断为逐项验收完成。
+
 ## 保留的独立控制通道
 
-Mac 主动经已配对的 ADB TLS 读取 UU 私有 FIFO（0600），平板不需要知道 Mac 的地址。通道目前承载固定功能动作和状态；原生像素滚动/部分 Mac 键盘导航代码留作诊断，0.11.1 不在日常手势路径调用它们。
+Mac 主动经已配对的 ADB TLS 读取 UU 私有 FIFO（0600），平板不需要知道 Mac 的地址。通道目前承载固定功能动作和状态；原生像素滚动/部分 Mac 键盘导航代码留作诊断，从 0.11.1 起不在日常手势路径调用它们。
 
 设备身份与地址分开配置：优先已连接且序列号匹配的设备，再试上次地址和 `_adb-tls-connect._tcp` 自动发现。跨网段不保证 mDNS 可见或网络可达，支持手动配置地址和域名。
 
 协议为一行一个 JSON，最多 4096 字节。FIFO 非阻塞写入，单读者锁防止并发读取分食消息；心跳不落盘，过期输入不补执行。实际发现 Helper 被强制终止后 ADB 子进程可能残留；安装流程现在清理本插件的精确读取命令，不重启全局 ADB server。不能将这项修补说成强制杀进程后所有情况都已自动恢复。
 
-CoreAudio 负责音量/静音；已有 BetterDisplay 负责亮度；系统应用入口负责 Launchpad 和 Mission Control。Fn 的目标仍为 Mac。ScreenActivity 入口提前拦截用于排查媒体键在到达自定义输入视图前被处理的问题；是否解决本次 Fn 故障，以实体测试为准。
+CoreAudio 负责音量/静音；已有 BetterDisplay 负责亮度；系统应用入口负责 Launchpad 和 Mission Control。Fn 的目标仍为 Mac。1.8 的系统解码与直达消息已通过用户 Fn 测试。ScreenActivity 的旧媒体键入口仅保留兼容作用。
 
 ## 后续网络和原生输入
 
@@ -50,7 +66,7 @@ CoreAudio 负责音量/静音；已有 BetterDisplay 负责亮度；系统应用
 
 ## 数据与诊断
 
-平板配置位于 UU 私有目录的 `pad_uu_touchpad.json`。`trace=false` 为正常状态。恢复期只额外记录最多八次功能键按下用于区分 F 键/媒体键路由，不记录文字。系统 Fn 诊断由临时属性 `debug.pad.uu.trace` 控制，每次系统模块加载最多 80 条，默认关闭，重启不保留。
+平板配置位于 UU 私有目录的 `pad_uu_touchpad.json`。`trace=false` 为正常状态。恢复期最多记录八次功能键按下；系统发送最多记录 16 次，UU 接收最多记录 12 次，不记录文字，也不追加自建日志文件。系统 Fn 诊断由临时属性 `debug.pad.uu.trace` 控制，每次系统模块加载最多 80 条，默认关闭，重启不保留。
 
 Mac 只覆盖 `~/Library/Application Support/Pad UU/helper-status.json` 和 `last-action.json`，以及必要的静音恢复值。连接配置单独保存，不追加日志。固定动作计数和滚动计数不记录文字，写盘合并并避开输入回调。源码、测试和脚本进入 Git；设备地址、签名密钥、备份和临时采样留在被忽略的 `.local`。
 
@@ -62,3 +78,6 @@ Mac 只覆盖 `~/Library/Application Support/Pad UU/helper-status.json` 和 `las
 - [Mos 4.2.1 ScrollEvent](https://github.com/Caldis/Mos/blob/4.2.1/Mos/ScrollCore/ScrollEvent.swift)：滚动阶段和计数标记的分类。
 - [Karabiner DriverKit VirtualHIDDevice](https://github.com/pqrs-org/Karabiner-DriverKit-VirtualHIDDevice)：虚拟键盘/鼠标与 DriverKit 部署要求。
 - [Tailscale MagicDNS](https://tailscale.com/docs/features/magicdns)：未来连接地址的域名解析。
+
+- [Linux 官方 HID Consumer 映射](https://github.com/torvalds/linux/blob/master/drivers/hid/hid-input.c)：`0x70`/`0x6F` 亮度、`0xEA`/`0xE9` 音量及媒体用途码。
+- [Android BroadcastReceiver.getSentFromUid](https://developer.android.com/reference/android/content/BroadcastReceiver#getSentFromUid()) 和 [BroadcastOptions.setShareIdentityEnabled](https://developer.android.com/reference/android/app/BroadcastOptions#setShareIdentityEnabled(boolean))：向接收方提供真实发送者身份。

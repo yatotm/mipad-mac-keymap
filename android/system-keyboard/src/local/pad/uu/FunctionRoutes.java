@@ -15,6 +15,7 @@ public final class FunctionRoutes {
     private static final class Route {
         final int mode;
         boolean released;
+        int lastFunctionRepeat = -1;
         Route(int mode) { this.mode = mode; }
     }
 
@@ -44,6 +45,13 @@ public final class FunctionRoutes {
     public synchronized int mode(String key) {
         Route route = routes.get(key);
         return route == null ? -1 : route.mode;
+    }
+
+    public synchronized boolean claimFunction(String key, int repeat) {
+        Route route = routes.get(key);
+        if (route == null || route.mode != REMOTE_FUNCTION || repeat <= route.lastFunctionRepeat) return false;
+        route.lastFunctionRepeat = repeat;
+        return true;
     }
 
     public static int index(int scan) {

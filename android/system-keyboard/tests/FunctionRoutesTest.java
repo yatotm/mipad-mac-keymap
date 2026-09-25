@@ -25,6 +25,12 @@ public final class FunctionRoutesTest {
         check(routes.record("held", false, LOCAL) == REMOTE);
         check(routes.record("ignored-chord", true, IGNORE) == IGNORE);
         check(routes.record("ignored-chord", false, LOCAL) == IGNORE);
+        routes.record("function-press", true, REMOTE_FUNCTION);
+        check(routes.claimFunction("function-press", 0));
+        check(!routes.claimFunction("function-press", 0));
+        check(routes.claimFunction("function-press", 1));
+        check(!routes.claimFunction("function-press", 1));
+        check(!routes.claimFunction("f1-remote", 0));
         int[] scans = {224, 225, 190, 99, 194, 193, 165, 164, 163, 113, 114, 115};
         for (int i = 0; i < scans.length; i++) check(FunctionRoutes.index(scans[i]) == i + 1);
         int[] standard = {59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 87, 88};

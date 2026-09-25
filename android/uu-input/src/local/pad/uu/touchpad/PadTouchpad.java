@@ -103,6 +103,11 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
                     configFile = new File(context.getFilesDir(), "pad_uu_touchpad.json");
                     inputPipe = new InputPipe(context.getFilesDir());
                     install(context.getClassLoader());
+                    new RemoteFunctionReceiver((Application) hook.thisObject, action -> {
+                        if (failed || !enabled) return;
+                        for (Session session : sessions.values()) stopMomentum(session);
+                        sendControl(action);
+                    });
                 } catch (Throwable error) { fail(error); }
             }
         });
@@ -289,7 +294,7 @@ public final class PadTouchpad implements IXposedHookLoadPackage {
             throw error;
         }
         loadConfig();
-        Log.i(TAG, "v0.11.1 已加载：恢复 UU 滚动与导航路径；Fn 和 Launchpad 保留独立控制");
+        Log.i(TAG, "v0.11.2 已加载：接收受系统身份保护的 Fn 请求，滚动与手势路径保持恢复版");
     }
 
     private void fail(Throwable error) {

@@ -1,6 +1,12 @@
 package local.pad.uu;
 
 import android.os.Build;
+import android.app.BroadcastOptions;
+import android.content.Context;
+import android.content.Intent;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 import android.view.InputDevice;
 import android.view.InputEvent;
@@ -23,6 +29,12 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
     private final FunctionRoutes routes = new FunctionRoutes();
     private final FunctionRoutes modifierRoutes = new FunctionRoutes();
     private final HeldFn fn = new HeldFn();
+    private final BluetoothFn bluetoothFn = new BluetoothFn();
+    private Handler functionHandler;
+    private volatile Runnable frameFinish;
+    private volatile Runnable functionRepeat;
+    private volatile long focusGeneration;
+    private int functionLogBudget = 16;
     private volatile boolean uuFocused;
     private volatile int fnDevice = -1;
     private Method windowOwner;
@@ -69,6 +81,8 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
                     uuFocused = isUuWindow(p.args[0]);
                     if (!uuFocused) {
                         fn.cancel();
+                        bluetoothFn.cancel();
+                        focusGeneration++;
                     }
                 }
             }));
@@ -80,7 +94,7 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
             for (XC_MethodHook.Unhook hook : installed) hook.unhook();
             throw error;
         }
-        Log.i(TAG, "v1.7 已加载：同一键盘跨接口共享 Fn，桥接顶排前的短暂释放帧");
+        Log.i(TAG, "v1.8 已加载：还原蓝牙 Fn Consumer 位图，功能请求由系统直接交给 UU");
     }
 
     private boolean isUuWindow(Object window) throws Exception {
@@ -115,6 +129,7 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
         int id = fnDevice;
         if (id >= 0 && InputDevice.getDevice(id) == null) {
             fn.reset();
+            bluetoothFn.reset();
             fnDevice = -1;
         }
     }
@@ -141,6 +156,55 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
                 + " meta=" + event.getMetaState() + " group=" + group + " route=" + mode);
     }
 
+    private synchronized Handler functions() {
+        if (functionHandler == null) functionHandler = new Handler(Looper.getMainLooper());
+        return functionHandler;
+    }
+
+    private static boolean repeatFunction(int index) {
+        return index == 1 || index == 2 || index == 11 || index == 12;
+    }
+
+    private void sendFunction(Object policy, int index) {
+        long generation = focusGeneration;
+        long when = SystemClock.elapsedRealtime();
+        Context context = (Context) XposedHelpers.getObjectField(policy, "mContext");
+        functions().post(() -> {
+            if (!uuFocused || generation != focusGeneration || SystemClock.elapsedRealtime() - when > 500) return;
+            try {
+                Intent intent = new Intent("local.pad.uu.FUNCTION").setPackage(TARGET)
+                        .addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+                        .putExtra("v", 1).putExtra("index", index).putExtra("when", when);
+                context.sendBroadcast(intent, null, BroadcastOptions.makeBasic().setShareIdentityEnabled(true).toBundle());
+                if (functionLogBudget-- > 0) Log.i(TAG, "系统 Fn 功能请求 index=" + index);
+            } catch (Throwable error) {
+                if (functionLogBudget-- > 0) Log.e(TAG, "发送 Fn 功能请求失败", error);
+            }
+        });
+    }
+
+    private void finishBluetoothFrame(Object policy) {
+        Handler handler = functions();
+        if (frameFinish != null) handler.removeCallbacks(frameFinish);
+        if (functionRepeat != null) handler.removeCallbacks(functionRepeat);
+        frameFinish = () -> {
+            int index = bluetoothFn.finishFrame();
+            if (index == 0 || !uuFocused) return;
+            sendFunction(policy, index);
+            if (!repeatFunction(index)) return;
+            int device = fnDevice;
+            functionRepeat = new Runnable() {
+                @Override public void run() {
+                    if (!uuFocused || bluetoothFn.holding() != index || InputDevice.getDevice(device) == null) return;
+                    sendFunction(policy, index);
+                    handler.postDelayed(this, 100);
+                }
+            };
+            handler.postDelayed(functionRepeat, 400);
+        };
+        handler.postDelayed(frameFinish, 4);
+    }
+
     private abstract static class GuardedHook extends XC_MethodHook {
         private boolean errorLogged;
         @Override protected final void beforeHookedMethod(MethodHookParam p) {
@@ -158,7 +222,6 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
 
     private final class QueueHook extends GuardedHook {
         private boolean announced;
-        private boolean functionAnnounced;
         private boolean localAnnounced;
         private boolean ignoredAnnounced;
         @Override protected void apply(MethodHookParam p) throws Throwable {
@@ -171,6 +234,21 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
                     && event.getAction() != KeyEvent.ACTION_UP) return;
             uuFocused = isUuWindow(XposedHelpers.getObjectField(p.thisObject, "mFocusedWindow"));
             int scan = event.getScanCode();
+            if (group == 1 && BluetoothFn.bit(scan) != 0
+                    && bluetoothFn.update(scan, down, event.getEventTime(), uuFocused && (Boolean) p.args[2])) {
+                modifierRoutes.record(stroke(group, event), down, FunctionRoutes.IGNORE);
+                if (scan == FnControlLayout.FN_SCAN) {
+                    if (down) {
+                        fnDevice = event.getDeviceId();
+                        if (uuFocused && bluetoothFn.enabled()) fn.press();
+                        else fn.cancel();
+                    }
+                    else fn.release(event.getEventTime());
+                }
+                p.setResult(0);
+                finishBluetoothFrame(p.thisObject);
+                return;
+            }
             if ((scan == FnControlLayout.FN_SCAN || scan == FnControlLayout.CONTROL_SCAN)
                     && mainKeyboard(event.getDevice())) {
                 int initialMode = scan == FnControlLayout.FN_SCAN
@@ -212,16 +290,18 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
                 }
                 return;
             }
-            if (mode == FunctionRoutes.REMOTE || mode == FunctionRoutes.REMOTE_FUNCTION) {
+            if (mode == FunctionRoutes.REMOTE_FUNCTION) {
+                p.setResult(0);
+                if (down && (event.getRepeatCount() == 0 || repeatFunction(index))
+                        && routes.claimFunction(key, event.getRepeatCount())) sendFunction(p.thisObject, index);
+                return;
+            }
+            if (mode == FunctionRoutes.REMOTE) {
                 // 在亮度、截屏、媒体处理之前放行；离开 UU 后不触发本地对应动作。
                 p.setResult(uuFocused ? 1 : 0);
                 if (!announced) {
                     announced = true;
                     Log.i(TAG, "顶排已直通远端，Fn 功能不再交给平板系统");
-                }
-                if (mode == FunctionRoutes.REMOTE_FUNCTION && !functionAnnounced) {
-                    functionAnnounced = true;
-                    Log.i(TAG, "Fn 功能层已命中，接口=" + group + " 扫描码=" + scan);
                 }
                 return;
             }
@@ -247,10 +327,15 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
             int group = family(event);
             if (group < 0 || !isUuWindow(p.args[2])
                     || !XposedHelpers.getBooleanField(p.thisObject, "mIsScreenOn")) return;
+            if (group == 1 && BluetoothFn.bit(event.getScanCode()) != 0
+                    && modifierRoutes.mode(stroke(group, event)) == FunctionRoutes.IGNORE) {
+                p.setResult(4);
+                return;
+            }
             if (FunctionRoutes.index(event.getScanCode()) > 0) {
                 int mode = routes.mode(stroke(group, event));
-                if (mode == FunctionRoutes.REMOTE || mode == FunctionRoutes.REMOTE_FUNCTION) p.setResult(1);
-                else if (mode == FunctionRoutes.IGNORE) p.setResult(4);
+                if (mode == FunctionRoutes.REMOTE) p.setResult(1);
+                else if (mode == FunctionRoutes.IGNORE || mode == FunctionRoutes.REMOTE_FUNCTION) p.setResult(4);
                 return;
             }
             if (!mainKeyboard(event.getDevice()) || localSystemKey(event.getKeyCode())) return;
@@ -274,7 +359,9 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
             // 已消费的本地按键不进入辅助输入状态机，避免重置其他仍按住的键。
             int scan = event.getScanCode();
             int modifierMode = modifierRoutes.mode(stroke(group, event));
-            if ((mainKeyboard(event.getDevice())
+            if ((group == 1 && BluetoothFn.bit(scan) != 0 && modifierMode == FunctionRoutes.IGNORE)
+                    || (index > 0 && routes.mode(stroke(group, event)) == FunctionRoutes.REMOTE_FUNCTION)
+                    || (mainKeyboard(event.getDevice())
                     && ((scan == FnControlLayout.FN_SCAN && modifierMode == FunctionRoutes.IGNORE)
                     || (scan == FnControlLayout.CONTROL_SCAN && modifierMode != FunctionRoutes.REMOTE)))
                     || (index > 0 && (routes.mode(stroke(group, event)) == FunctionRoutes.IGNORE
