@@ -19,3 +19,5 @@
 项目不修改 UU 原 APK，不修改 Codex 或终端快捷键，不记录输入文字。
 
 构建和部署见 [开发说明](docs/development.md)，协议与作用范围见 [输入链路](docs/architecture.md)，验证状态见 [验证记录](docs/verification.md)。
+
+Moonlight/Sunshine 的源码适配评估见 [源码审查报告](docs/moonlight-sunshine-source-review.md)。
