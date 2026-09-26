@@ -4,7 +4,7 @@
 
 上次实体 Fn 验收通过的基线为系统键盘 1.8、UU 输入 0.11.2、Mac Helper 0.3.0；其他输入沿用已确认基本恢复的 0.11.1 路径。
 
-`feature/moonlight-input` 当前安装系统键盘 1.9、Moonlight 模块 0.2.4 和 Helper 0.5.4。官方 Moonlight 与同版本 Sunshine 本地光标补丁已授权、配对并实际连接。触控板原始坐标现在驱动平板本地光标，点击按当前主显示器的逻辑尺寸定位；双指横滑使用连续事件，保留中途保持和反向。用户已确认 Chrome 导航、Launchpad 翻页、通知方向和当前触控手势正常；Sunshine 捕获补丁已消除视频中滞后的第二个箭头，用户确认鼠标正常；重新登记新签名的辅助功能权限后，键盘也恢复正常。见 [手动测试清单](docs/manual-input-checklist.md) 和 [实现与验证边界](docs/moonlight-input.md)。
+当前安装系统键盘 1.9、Moonlight 模块 0.2.4 和 Helper 0.5.4。官方 Moonlight 与同版本 Sunshine 本地光标补丁已授权、配对并实际连接。触控板原始坐标现在驱动平板本地光标，点击按当前主显示器的逻辑尺寸定位；双指横滑使用连续事件，保留中途保持和反向。用户已确认 Chrome 导航、Launchpad 翻页、通知方向和当前触控手势正常；Sunshine 捕获补丁已消除视频中滞后的第二个箭头，用户确认鼠标正常；重新登记新签名的辅助功能权限后，键盘也恢复正常。见 [手动测试清单](docs/manual-input-checklist.md) 和 [实现与验证边界](docs/moonlight-input.md)。
 
 蓝牙模式下，按住原 Ctrl 时，部分顶排的 Consumer 用途码被报告成修饰键位图。系统模块现在还原用途并消费假修饰键，通过受保护的本机消息和已配对的 ADB TLS 通道执行 Mac 功能。Fn 不再依赖媒体键穿过安卓系统和 UU 的普通键盘分发。
 
