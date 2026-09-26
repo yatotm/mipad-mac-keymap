@@ -102,3 +102,14 @@
 - 旧三个应用输入模块和两个停用 Magisk 模块已备份、卸载；Vector 中唯一启用的输入模块为 `local.pad.uu.keyboard`，系统作用域保留；其它用户插件按要求保持停用原状。
 - Mac 的旧 Helper/DeskPad TCC 记录清零，Sunshine 的 Accessibility、ScreenCapture、AudioCapture 三项授权均保留为允许；后台只有当前 Sunshine，没有独立输入 Helper。清理后当前串流仍 active、permission=true，协议拒绝为 0。
 - 1.11 已安装并注册，用户选择稍后自行重启，当前远控保持运行；UU 精简后的实体修饰键仍需用户按实际使用复测。
+
+## 原生托盘恢复与重复菜单修复（2026-09-27）
+
+- 启用原生托盘，Qt Framework 和插件随 App 打包；安装保留 Framework 版本链接，深度签名验证通过，签名身份规则与已验收无托盘版相同。
+- 首版出现两个菜单重叠，用户反馈后定位到原生 `setContextMenu` 与 Trigger 回调中的手动 `popup` 同时响应。Qt 文档说明 macOS 设置上下文菜单后会在鼠标按下时弹出，见 [QSystemTrayIcon](https://doc.qt.io/qt-6/qsystemtrayicon.html#ActivationReason-enum)。修复仅取消 macOS 的重复手动菜单请求，其它平台和显式菜单调用保留。
+- 新增离屏回归检查直接调用实际 Qt 激活槽：原代码失败，修复后通过；不发送鼠标事件、不截图、不申请新的测试权限。协议/光标检查、完整构建和签名验证通过。
+- 实际安装与最终构建摘要一致，检查的 34 个 Mach-O 文件没有指向 Homebrew 或临时缓存的动态库引用；运行进程也未加载这些外部路径。
+- 用户已确认“现在只出现一个菜单”。安装后输入后端重新握手，active=true、permission=true，拒绝计数为 0。只有一个 Sunshine 进程，用户配置文件与替换前逐字节一致。
+- 无托盘内置版备份在 `.local/rollback/pre-tray/`，可通过 `--restore-no-tray` 恢复。安卓重启仍由用户自行安排，本轮没有重启平板。
+
+收尾移除了本轮新增的 10 个 Homebrew 构建包、DBus 默认配置及构建/下载缓存，App 保留完整内嵌运行库。Homebrew 安装 Qt 时升级的原有字体/图形共享依赖保留，避免卸载影响其它软件。清理后控制台仍正常响应、输入会话继续运行。

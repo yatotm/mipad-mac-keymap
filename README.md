@@ -2,7 +2,7 @@
 
 为小米 Pad 6 Max（yudi、HyperOS 3 / Android 15）、配套键盘与 Mac 提供远控输入适配。
 
-内置版已通过用户本轮体验验收。2026-09-27 清理了旧输入插件与 Mac 授权残留，当前组件和控制台入口见 [安装组成](docs/installed-components.md)。
+内置版已通过用户本轮体验验收。2026-09-27 清理了旧输入插件与 Mac 授权残留，现已恢复 Sunshine 原生托盘，并修复重复菜单。当前组件和控制台入口见 [安装组成](docs/installed-components.md)。
 
 当前链路为 **MiPad Moonlight → 已配对、加密的串流连接 → Sunshine 内置输入后端**。普通键盘使用上游协议；本地光标、双指连续滚动、三指导航/拖拽、捏合与 Fn 使用同一连接中的扩展消息。日常输入不再需要 Wi-Fi ADB，也不需要独立的 Pad Mac Helper。公网连接沿用 Moonlight/Sunshine 原有方式，没有新增远控端口或修改路由设置。
 

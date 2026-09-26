@@ -6,13 +6,13 @@
 
 登录信息保存在本机 `.local/sunshine-web.json`，不提交 Git。浏览器首次访问可能显示本机自签名证书提示，需要用户处理；未修改浏览器的全局安全设置。
 
-Sunshine 构建参数关闭托盘图标，因此没有菜单栏图标。它由当前用户的 `local.pad.sunshine` LaunchAgent 在登录后启动，并在异常退出时重新启动。配置文件是 `~/.config/sunshine/sunshine.conf`；网页提供主机配置、应用列表和配对管理。保存后如需重启，按网页提示操作；会断开当前串流。
+Sunshine 现在启用原生菜单栏图标，菜单包含 **Open Sunshine**（打开控制台）、**Restart** 和 **Quit**。托盘与输入后端属于同一个 Sunshine 进程。它由当前用户的 `local.pad.sunshine` LaunchAgent 在登录后启动，并在异常退出时重新启动。配置文件是 `~/.config/sunshine/sunshine.conf`；网页提供主机配置、应用列表和配对管理。保存后如需重启，按网页提示操作；会断开当前串流。
 
 ## 保留的组件
 
 | 位置 | 组件 | 状态与用途 |
 |---|---|---|
-| Mac | 定制 Sunshine | 唯一新增的远控输入后台；辅助功能、录屏、系统音频三项授权有效 |
+| Mac | 定制 Sunshine | 原生托盘与远控输入同进程；辅助功能、录屏、系统音频三项授权有效 |
 | Mac | BetterDisplay / Mos / UU | 原有显示、鼠标和备用远控工具保留，没有更改配置 |
 | Android | MiPad Moonlight 12.2-pad.1 | 已验收的客户端，没有重编译或替换 |
 | Vector/LSP | 小米 Pad · Mac 键盘直通 1.11 | 唯一启用的定制输入模块，作用域为系统；更新后须重启加载 |
@@ -41,3 +41,9 @@ UU 只保留语音键→Control、四叶草→Option、Alt→Command。左下角
 系统键盘 1.11 通过既有 Fn/修饰键检查，以及新增的“Moonlight 功能层保持、UU 精简、应用切换”检查。APK 完整安装与 Vector 注册检查通过。重启前运行的仍是旧系统进程中的模块，不能把已安装版本当作已经加载。
 
 用户选择稍后自行重启，当前远控会话保持运行；没有声称 1.11 已在 system_server 中加载。
+
+## 托盘恢复
+
+2026-09-27 重新构建启用了原生托盘，并修正 macOS 一次点击弹出两份菜单的问题。用户确认“现在只出现一个菜单”。Sunshine 配置、配对、签名身份及三个现用权限保持，Moonlight 客户端和输入参数没有更换。
+
+如需回到此前已验收的无托盘内置版，执行 `python3 tools/install_sunshine.py --restore-no-tray`。备份位于 `.local/rollback/pre-tray/Sunshine.app`；不要误用 `--restore-previous`，后者恢复的是更早的 Helper 链路版本。

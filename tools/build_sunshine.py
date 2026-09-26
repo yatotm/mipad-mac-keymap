@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""从固定版本构建本地光标适配的 Sunshine；只生成 App，不替换运行版本。"""
+"""从固定版本构建带原生托盘和内置输入的 Sunshine；只生成 App。"""
 from pathlib import Path
 import argparse
 import json
@@ -38,7 +38,7 @@ run('cmake', '-S', source, '-B', build, '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Relea
     '-DPAD_INPUT_ARCHIVE=' + str(root / '.cache/mac-native/libPadInput.a'),
     '-DPAD_INPUT_ROOT=' + str(root / 'sunshine/input'), '-DPAD_PROTOCOL_ROOT=' + str(root / 'protocol'),
     '-DPAD_SWIFT_RUNTIME=' + swift_runtime, '-DPAD_SWIFT_SDK=' + str(swift_sdk),
-    '-DBUILD_DOCS=OFF', '-DBUILD_TESTS=OFF', '-DSUNSHINE_ENABLE_TRAY=OFF', '-DBOOST_USE_STATIC=ON',
+    '-DBUILD_DOCS=OFF', '-DBUILD_TESTS=OFF', '-DSUNSHINE_ENABLE_TRAY=ON', '-DBOOST_USE_STATIC=ON',
     '-DOPUS_USE_STATIC=ON', '-DCMAKE_PREFIX_PATH=/opt/homebrew', '-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0',
     '-DSUNSHINE_PUBLISHER_NAME=MiPad Mac Keymap',
     '-DSUNSHINE_PUBLISHER_ISSUE_URL=https://github.com/yatotm/mipad-mac-keymap/issues')
@@ -47,6 +47,13 @@ run('xcrun', 'clang', '-fobjc-arc', '-fblocks', '-framework', 'Foundation',
     '-o', build / 'pad-cursor-test')
 run(build / 'pad-cursor-test')
 run('cmake', '--build', build, '--target', 'sunshine', '-j', '8')
+tray_test = root / '.cache/cmake-build-tray-test'
+run('cmake', '-S', root / 'sunshine/tests/tray', '-B', tray_test, '-G', 'Ninja',
+    '-DPAD_TRAY_SOURCE=' + str(source / 'third-party/tray'),
+    '-DPAD_TRAY_LIBRARY=' + str(build / 'third-party/tray/libtray.a'),
+    '-DCMAKE_PREFIX_PATH=/opt/homebrew')
+run('cmake', '--build', tray_test)
+run(tray_test / 'pad-tray-test')
 if stage.exists():
     shutil.rmtree(stage)
 run('cmake', '--install', build, '--prefix', stage, '--component', 'Runtime')
@@ -61,11 +68,15 @@ info_path = app / 'Contents/Info.plist'
 info = plistlib.loads(info_path.read_bytes())
 info['PadCursorRevision'] = '2'
 info['PadInputProtocol'] = '1'
+info['PadTrayRevision'] = '1'
 info['LSMinimumSystemVersion'] = '15.0'
 info_path.write_bytes(plistlib.dumps(info))
 identity = (root / '.local/mac-signing-identity').read_text().strip()
 for library in sorted(app.rglob('*.dylib')):
     run('codesign', '--force', '--options', 'runtime', '--sign', identity, library)
+# 原生托盘依赖 Qt；先签内嵌 Framework，再签最外层 App。
+for framework in sorted(app.rglob('*.framework'), key=lambda p: len(p.parts), reverse=True):
+    run('codesign', '--force', '--options', 'runtime', '--sign', identity, framework)
 run('codesign', '--force', '--options', 'runtime', '--sign', identity,
     '--entitlements', source / 'src_assets/macos/entitlements.plist', app)
 run('codesign', '--verify', '--deep', '--strict', app)

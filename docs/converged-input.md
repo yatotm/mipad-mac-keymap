@@ -6,7 +6,7 @@
 |---|---|---|
 | Android | MiPad Moonlight 12.2-pad.1，`local.pad.moonlight.client` | 直接处理触控板原始事件，在本地绘制光标，经串流发送增强输入 |
 | Android 系统 | Vector 键盘 1.11 | 仅在指定远控窗口前台重映射键盘，仅向 Moonlight 传递 Fn 功能，UU 只保留修饰键 |
-| Mac | Sunshine 2026.914.233613，PadCursorRevision 2 / PadInputProtocol 1 | 视频捕获、普通键盘与增强原生输入由同一个进程处理 |
+| Mac | Sunshine 2026.914.233613，PadCursorRevision 2 / PadInputProtocol 1 / PadTrayRevision 1 | 视频捕获、普通键盘与增强原生输入由同一个进程处理 |
 
 没有独立的增强输入端口、主机发现服务或 Mac Helper。系统键盘模块仍然必要：普通 Android 应用无法可靠阻止 HyperOS 先消费系统快捷键。ADB 仅用于安装和开发，断开它不应影响输入。旧包和配置备份保留；旧的应用级输入模块已在 2026-09-27 卸载，恢复旧链路需要一并重新安装对应模块。
 
@@ -22,7 +22,7 @@
 
 ## 源码保存
 
-全部适配源码在本仓库；上游基础代码以固定提交加补丁重建。没有把修改只留在 `.local` 克隆里。
+全部适配源码在本仓库；上游基础代码以固定提交加补丁重建。没有把修改只留在 `.local` 克隆里。托盘子模块另有固定提交 `c329d9fd0d39dfb47f0f2fb5467e1db2e8a1d623` 和 `sunshine/tray-macos-menu.patch`。
 
 | 上游 | 固定提交 | 本仓库改动 |
 |---|---|---|
@@ -34,7 +34,7 @@
 
 ## 构建
 
-Mac 工具链：Xcode Command Line Tools、Python 3、Homebrew OpenJDK、CMake、Ninja、miniupnpc、opus、OpenSSL。Sunshine 使用其固定的 Boost 1.89/FFmpeg 依赖，不安装最新版 Boost 代替。Swift 后端静态链接进 Sunshine。
+Mac 工具链：Xcode Command Line Tools、Python 3、Homebrew OpenJDK、CMake、Ninja、miniupnpc、opus、OpenSSL、Qt 6 的 qtbase/qtsvg。Sunshine 使用其固定的 Boost 1.89/FFmpeg 依赖，不安装最新版 Boost 代替。Swift 后端静态链接进 Sunshine。原生托盘开关为 `SUNSHINE_ENABLE_TRAY=ON`，Qt Framework 与 Cocoa 插件随 App 打包并逐层签名，安装时保留 Framework 的符号链接。
 
 Android 客户端固定 SDK 37.0 / Build Tools 37.0.0 / NDK 29.0.14206865；系统模块仍使用最小 SDK 35 构建。Google 的 package.xml 元数据与下载摘要一同保存，避免 SDK 37.0 的旧式 source.properties 探测失败。构建脚本不自动接受许可证或写入许可证接受标记。
 
@@ -54,7 +54,7 @@ python3 tools/build_android.py system-keyboard
 ```sh
 git clone https://github.com/LizardByte/Sunshine.git .local/Sunshine
 git -C .local/Sunshine checkout 63d35f702ee9e362e43263742981836ec0710384
-git -C .local/Sunshine submodule update --init --recursive third-party/moonlight-common-c third-party/libdisplaydevice third-party/libvirtualhid third-party/lizardbyte-common third-party/Simple-Web-Server third-party/TPCircularBuffer
+git -C .local/Sunshine submodule update --init --recursive third-party/moonlight-common-c third-party/libdisplaydevice third-party/libvirtualhid third-party/lizardbyte-common third-party/Simple-Web-Server third-party/TPCircularBuffer third-party/tray
 git -C .local/Sunshine submodule update --init third-party/build-deps
 python3 tools/build_sunshine.py --source .local/Sunshine
 python3 tools/install_sunshine.py

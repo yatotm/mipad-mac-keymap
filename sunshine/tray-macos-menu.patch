@@ -1,0 +1,19 @@
+diff --git a/src/QtTrayMenu.cpp b/src/QtTrayMenu.cpp
+index fe04988..d75c9df 100644
+--- a/src/QtTrayMenu.cpp
++++ b/src/QtTrayMenu.cpp
+@@ -293,9 +293,12 @@ void QtTrayMenu::onTrayActivated(QSystemTrayIcon::ActivationReason reason) {
+   }
+   if (trayStruct && trayStruct->cb) {
+     trayStruct->cb(trayStruct);
+-  } else {
+-    showMenu();
++    return;
+   }
++  // macOS 的原生上下文菜单已响应鼠标按下，只为其它平台补齐左键弹出。
++#if !defined(__APPLE__)
++  showMenu();
++#endif
+ }
+ 
+ void QtTrayMenu::onMenuItemTriggered() {

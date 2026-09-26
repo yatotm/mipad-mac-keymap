@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.16)
+project(pad_tray_test LANGUAGES CXX)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Svg)
+add_executable(pad-tray-test main.cpp)
+target_compile_features(pad-tray-test PRIVATE cxx_std_17)
+target_include_directories(pad-tray-test PRIVATE "${PAD_TRAY_SOURCE}/src")
+target_link_libraries(pad-tray-test PRIVATE "${PAD_TRAY_LIBRARY}" Qt6::Widgets Qt6::Svg)

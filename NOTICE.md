@@ -11,3 +11,5 @@ Android SDK 和 Xposed API 仅作为下载的构建依赖保存在 `.cache`，�
 Moonlight Android 的固定基线为 `b48494cb96bff23d8886c4775cc4f39a1075495d`，moonlight-common-c 为 `874ac9548f1bd6f095ef2b435c42cdde460e7821`。两者的接入补丁保存在 `moonlight/patches`，适配源码在 `moonlight/client`。遵循上游 GPL-3.0 许可，许可文本见 `LICENSES/Moonlight-GPL-3.0.txt`。
 
 Sunshine 的固定基线为 `63d35f702ee9e362e43263742981836ec0710384`，完整接入补丁保存在 `sunshine/converged.patch`，新增源码在 `sunshine/input` 和 `mac-input`，遵循上游 GPL-3.0-only，许可见 `LICENSES/Sunshine-GPL-3.0.txt`。旧的独立光标补丁仍保留用于历史版本。构建说明见 `docs/converged-input.md`；不将第三方二进制提交仓库。
+
+Sunshine 原生托盘使用 LizardByte/tray，固定提交 `c329d9fd0d39dfb47f0f2fb5467e1db2e8a1d623`，MIT 许可见 `LICENSES/Tray-MIT.txt`。macOS 菜单重复弹出修复保存于 `sunshine/tray-macos-menu.patch`；托盘依赖的 Qt Widgets/Svg 动态库随本地 App 打包，不提交第三方二进制。

@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MOONLIGHT_COMMIT = 'b48494cb96bff23d8886c4775cc4f39a1075495d'
 CORE_COMMIT = '874ac9548f1bd6f095ef2b435c42cdde460e7821'
 SUNSHINE_COMMIT = '63d35f702ee9e362e43263742981836ec0710384'
+TRAY_COMMIT = 'c329d9fd0d39dfb47f0f2fb5467e1db2e8a1d623'
 
 
 def apply(source, commit, patch):
@@ -39,3 +40,4 @@ def moonlight(source):
 
 def sunshine(source):
     apply(source, SUNSHINE_COMMIT, 'sunshine/converged.patch')
+    apply(source / 'third-party/tray', TRAY_COMMIT, 'sunshine/tray-macos-menu.patch')
