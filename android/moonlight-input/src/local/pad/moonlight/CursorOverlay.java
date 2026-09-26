@@ -109,7 +109,7 @@ final class CursorOverlay extends View {
     @Override protected void onDraw(Canvas canvas) {
         // 限时诊断使用蓝色区分本地箭头与视频中的箭头，结束后自动恢复。
         fill.setColor(diagnostics.active() ? 0xff00aaff : 0xff101010);
-        canvas.save(); canvas.translate(left, top); canvas.scale(density, density);
+        canvas.save(); canvas.translate(left, top); canvas.scale(density * 0.65f, density * 0.65f);
         canvas.drawPath(arrow, stroke); canvas.drawPath(arrow, fill); canvas.restore();
         diagnostics.cursorDrawn(pendingDrawTime); pendingDrawTime = 0;
     }

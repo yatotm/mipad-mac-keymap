@@ -8,17 +8,20 @@ public final class GestureEngine {
         void magnify(double delta, String phase);
         void drag(float x, float y, boolean start);
         void release();
+        void secondaryClick();
     }
     private static final int IDLE = 0, WAIT = 1, SCROLL = 2, DOCK = 3, DRAG = 4, DONE = 5, ZOOM = 6;
     private final Output output;
     private int mode, fingers, axis;
     private float originX, originY, originSpan, lastX, lastY, lastSpan;
-    private long began, sampleTime, movedAt;
+    private long began, sampleTime, movedAt, contactBegan;
+    private boolean secondaryTap;
     private double progress, velocity;
     public GestureEngine(Output output) { this.output = output; }
     public boolean captured() { return mode != IDLE; }
 
     public void cancel(long time) {
+        secondaryTap = false;
         finish(time, true);
         mode = IDLE;
         fingers = 0;
@@ -36,23 +39,38 @@ public final class GestureEngine {
     }
 
     public boolean update(int action, int count, float x, float y, float span, int buttons, long time) {
-        if (action == 0) cancel(time);
+        if (action == 0) { cancel(time); contactBegan = time; }
         boolean claimed = captured();
         if (action == 1 || action == 3 || count == 0) {
+            // 等两指全部抬起再右击，取消、拖动或长时间停留都不能变成点击。
+            boolean click = action == 1 && buttons == 0 && time >= contactBegan && time - contactBegan <= 250
+                    && (secondaryTap || (mode == WAIT && fingers == 2))
+                    && Float.isFinite(x) && Float.isFinite(y)
+                    && (!secondaryTap || Math.hypot(x - lastX, y - lastY) < 0.35);
+            secondaryTap = false;
             finish(time, action == 3);
             mode = IDLE; fingers = 0;
+            if (click) output.secondaryClick();
             return claimed;
         }
         if (!Float.isFinite(x) || !Float.isFinite(y) || !Float.isFinite(span) || time < sampleTime) {
             cancel(time); return claimed;
         }
         if (count > 4 || buttons != 0) {
+            secondaryTap = false;
             if (claimed) finish(time, true);
             return claimed;
         }
-        if (mode == DONE) return true;
+        if (mode == DONE) {
+            if (count != 1 || Math.hypot(x - lastX, y - lastY) >= 0.35) secondaryTap = false;
+            return true;
+        }
         if (count != fingers) {
-            if (count < fingers) { finish(time, false); return claimed; }
+            if (count < fingers) {
+                secondaryTap = mode == WAIT && fingers == 2 && count == 1;
+                lastX = x; lastY = y;
+                finish(time, false); return claimed;
+            }
             if (count < 2) return false;
             finish(time, true);
             mode = WAIT; fingers = count; began = sampleTime = time;

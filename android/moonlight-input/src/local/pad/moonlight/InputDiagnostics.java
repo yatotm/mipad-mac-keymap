@@ -1,6 +1,7 @@
 package local.pad.moonlight;
 
 import android.view.MotionEvent;
+import android.view.KeyEvent;
 import android.os.SystemClock;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -12,7 +13,7 @@ final class InputDiagnostics {
     private final File arm, state;
     private long nextCheck, until, nextWrite, motions, moves, positions;
     private int maxPointers, maxPadPointers;
-    private long inputCount, inputTotal, inputMax, drawCount, drawTotal, drawMax;
+    private long inputCount, inputTotal, inputMax, drawCount, drawTotal, drawMax, keys, sentKeys, cancellations;
     private JSONObject value = new JSONObject();
 
     InputDiagnostics(File directory) {
@@ -28,6 +29,7 @@ final class InputDiagnostics {
                 long deadline = Long.parseLong(new String(Files.readAllBytes(arm.toPath()), StandardCharsets.UTF_8).trim());
                 if (deadline != until) {
                     motions = moves = positions = inputCount = inputTotal = inputMax = drawCount = drawTotal = drawMax = 0;
+                    keys = sentKeys = cancellations = 0;
                     maxPointers = maxPadPointers = 0;
                     value = new JSONObject();
                 }
@@ -42,6 +44,7 @@ final class InputDiagnostics {
         if (!enabled()) return;
         try {
             motions++;
+            if (event.getActionMasked() == MotionEvent.ACTION_CANCEL) cancellations++;
             maxPointers = Math.max(maxPointers, event.getPointerCount());
             if (supported) {
                 maxPadPointers = Math.max(maxPadPointers, event.getPointerCount());
@@ -52,6 +55,8 @@ final class InputDiagnostics {
                 }
             }
             value.put("source", event.getSource()).put("action", event.getActionMasked())
+                    .put("motion_at", event.getEventTime()).put("device", event.getDeviceId())
+                    .put("cancellations", cancellations)
                     .put("pointers", event.getPointerCount()).put("max_pointers", maxPointers)
                     .put("supported", supported).put("receiving", receiving).put("captured", capture)
                     .put("claimed", claimed).put("buttons", event.getButtonState())
@@ -84,6 +89,24 @@ final class InputDiagnostics {
 
     void flush() { if (enabled()) write(); }
     boolean active() { return enabled(); }
+
+    void key(KeyEvent event) {
+        if (!enabled()) return;
+        try {
+            value.put("keys", ++keys).put("key_at", event.getEventTime()).put("key_device", event.getDeviceId());
+            nextWrite = 0;
+            write();
+        } catch (Exception ignored) { }
+    }
+
+    void keyboardSent() {
+        if (!enabled()) return;
+        try {
+            value.put("sent_keys", ++sentKeys).put("sent_key_at", SystemClock.uptimeMillis());
+            nextWrite = 0;
+            write();
+        } catch (Exception ignored) { }
+    }
 
     void cursorDrawn(long eventTime) {
         if (!enabled() || eventTime <= 0) return;

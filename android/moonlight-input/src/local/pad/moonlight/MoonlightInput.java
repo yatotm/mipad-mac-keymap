@@ -110,6 +110,7 @@ public final class MoonlightInput implements IXposedHookLoadPackage {
             @Override protected void afterHookedMethod(MethodHookParam hook) {
                 if (failed || pipe == null || hook.hasThrowable()) return;
                 forwardedKeys.record((Short) hook.args[0], (Byte) hook.args[1], (Byte) hook.args[3]);
+                if (diagnostics != null) diagnostics.keyboardSent();
             }
         });
         XposedHelpers.findAndHookMethod(game, "handleMotionEvent", View.class, MotionEvent.class, new XC_MethodHook() {
@@ -126,7 +127,8 @@ public final class MoonlightInput implements IXposedHookLoadPackage {
                 Activity activity = (Activity) hook.thisObject;
                 MotionEvent event = (MotionEvent) hook.args[1];
                 Session session = sessions.get(activity);
-                if (event.getActionMasked() == MotionEvent.ACTION_CANCEL && session != null) {
+                if ((event.getActionMasked() == MotionEvent.ACTION_CANCEL
+                        || (event.getFlags() & MotionEvent.FLAG_CANCELED) != 0) && session != null) {
                     session.cancel();
                     if (supported(event)) hook.setResult(true);
                     return;
@@ -171,6 +173,7 @@ public final class MoonlightInput implements IXposedHookLoadPackage {
             XposedHelpers.findAndHookMethod(game, method, KeyEvent.class, new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam hook) {
                     KeyEvent event = (KeyEvent) hook.args[0];
+                    if (diagnostics != null) diagnostics.key(event);
                     int key = event.getKeyCode();
                     if (key == KeyEvent.KEYCODE_CTRL_LEFT || key == KeyEvent.KEYCODE_CTRL_RIGHT
                             || key == KeyEvent.KEYCODE_ALT_LEFT || key == KeyEvent.KEYCODE_ALT_RIGHT
@@ -190,7 +193,7 @@ public final class MoonlightInput implements IXposedHookLoadPackage {
                 }
             });
         }
-        Log.i("PadMoonlight", "0.2.4 已加载；不记录按键文字，不修改 Moonlight APK");
+        Log.i("PadMoonlight", "0.2.6 已加载；不记录按键文字，不修改 Moonlight APK");
     }
 
     private Session session(Activity activity) {
@@ -313,6 +316,7 @@ public final class MoonlightInput implements IXposedHookLoadPackage {
         @Override public void button(int button, boolean down) {
             XposedHelpers.callStaticMethod(moonBridge, "sendMouseButton", (byte) (down ? 7 : 8), (byte) button);
         }
+        @Override public void secondaryClick() { button(3, true); button(3, false); }
         @Override public void move(float x, float y) {
             if (cursor.move(x, y)) return;
             dragX += x; dragY += y;
