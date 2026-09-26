@@ -6,7 +6,6 @@ final class NativeGesture {
     private let source = CGEventSource(stateID: .combinedSessionState)
     private var axis: Int?
     private var progress: Double = 0
-    private var generation = 0
 
     static var supported: Bool { ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 15 }
 
@@ -27,11 +26,13 @@ final class NativeGesture {
         integer(123, Int64(axis))
         integer(132, code)
         real(124, progress)
-        integer(135, Int64(Float(progress).bitPattern))
+        // 用有符号 Int32 保存 Float32 位模式，再传入 CoreGraphics 的 Int64 参数。
+        integer(135, Int64(Int32(bitPattern: Float(progress).bitPattern)))
         if code == 4 || code == 8 {
             real(129, velocity); real(130, velocity)
         }
         event.flags = .maskNonCoalesced
+        event.timestamp = DispatchTime.now().uptimeNanoseconds
         event.setIntegerValueField(.eventSourceUserData, value: bridgeMarker)
         return event
     }
@@ -47,24 +48,16 @@ final class NativeGesture {
               let velocity = frame.velocity, let phase = frame.phase else { return }
         if phase == "began" {
             reset()
-            generation += 1
             axis = incoming
         } else if axis != incoming { return }
         progress = value
         post(incoming, value, velocity, phase)
         if phase == "ended" || phase == "cancelled" {
             axis = nil
-            let token = generation
-            // Dock 偶尔遗漏结束帧；重发不得取消之后开始的新手势。
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-                guard let self, self.generation == token, self.axis == nil else { return }
-                self.post(incoming, value, velocity, phase)
-            }
         }
     }
 
     func reset() {
-        generation += 1
         if let axis { post(axis, progress, 0, "cancelled") }
         axis = nil
         progress = 0

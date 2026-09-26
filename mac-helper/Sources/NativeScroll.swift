@@ -11,6 +11,7 @@ final class NativeScroll {
         guard let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel,
                                   wheelCount: 2, wheel1: y, wheel2: x, wheel3: 0) else { return nil }
         event.flags = flags
+        event.timestamp = DispatchTime.now().uptimeNanoseconds
         if let point { event.location = point }
         event.setIntegerValueField(.eventSourceUserData, value: bridgeMarker)
         event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)

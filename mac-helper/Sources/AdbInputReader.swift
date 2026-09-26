@@ -5,6 +5,7 @@ final class AdbInputReader {
     private let lock = NSLock()
     private var stopped = false
     private var process: Process?
+    private var streamInput: FileHandle?
     private var lastData = ProcessInfo.processInfo.systemUptime
     private var streaming = false
     private var watchdog: DispatchSourceTimer?
@@ -28,6 +29,8 @@ final class AdbInputReader {
             guard let self else { return }
             self.lock.withLock {
                 if self.streaming && ProcessInfo.processInfo.systemUptime - self.lastData > 4 {
+                    try? self.streamInput?.close()
+                    self.streamInput = nil
                     self.process?.terminate()
                 }
             }
@@ -40,6 +43,8 @@ final class AdbInputReader {
     func stop() {
         lock.withLock {
             stopped = true
+            try? streamInput?.close()
+            streamInput = nil
             if process?.isRunning == true { process?.terminate() }
         }
         watchdog?.cancel()
@@ -50,16 +55,25 @@ final class AdbInputReader {
         DispatchQueue.main.async { [self] in if running { onState(value) } }
     }
 
-    private func launch(_ config: ConnectionConfiguration, _ arguments: [String]) -> (Process, Pipe)? {
+    private func launch(_ config: ConnectionConfiguration, _ arguments: [String], lease: Bool = false) -> (Process, Pipe)? {
         let task = Process(), pipe = Pipe()
+        let input = lease ? Pipe() : nil
         task.executableURL = URL(fileURLWithPath: config.adb)
         task.arguments = arguments
         task.standardOutput = pipe
         task.standardError = FileHandle.nullDevice
-        task.standardInput = FileHandle.nullDevice
+        if let input { task.standardInput = input }
+        else { task.standardInput = FileHandle.nullDevice }
         return lock.withLock {
             guard !stopped else { return nil }
-            do { try task.run(); process = task; return (task, pipe) }
+            do {
+                try task.run(); process = task
+                if let input {
+                    try? input.fileHandleForReading.close()
+                    streamInput = input.fileHandleForWriting
+                }
+                return (task, pipe)
+            }
             catch { return nil }
         }
     }
@@ -119,17 +133,28 @@ final class AdbInputReader {
 
     private func read(_ config: ConnectionConfiguration, device: String) {
         let base = "/data/user/0/\(package)/files/pad_uu_input"
-        // 锁只覆盖本通道，防止断线后两个 cat 同时分食 FIFO；文件始终为零字节。
-        // Android mksh 的 exec 重定向默认带 CLOEXEC，显式传递 9 才能让锁跨进程保留。
-        let remote = "su -c 'umask 077; exec 9>\(base).lock; flock -n 9 9>&9 || exit 75; exec cat \(base).pipe 9>&9'"
-        guard let (task, pipe) = launch(config, ["-s", device, "exec-out", remote]) else { return }
-        lock.withLock { streaming = true; lastData = ProcessInfo.processInfo.systemUptime }
+        // stdin 只充当生命周期信号，不接收命令。Mac 退出或 ADB 断线后 EOF 会清理 root 子进程和锁。
+        let script = """
+        umask 077; exec 2>/dev/null; exec 9>\(base).lock
+        flock -n 9 9>&9 || exit 75
+        exec 8<&0
+        cat \(base).pipe & pad_reader=$!
+        (while IFS= read -r pad_lease; do :; done; kill "$pad_reader" 2>/dev/null) <&8 &
+        trap 'kill $(jobs -p) 2>/dev/null; wait' EXIT
+        trap 'exit 0' HUP INT TERM
+        wait "$pad_reader"
+        """
+        let remote = "su -c '" + script.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        // shell v2 转发 stdin 和 EOF；exec-out 是单向读取，不能承载退出通知。
+        guard let (task, pipe) = launch(config, ["-s", device, "shell", "-T", remote], lease: true) else { return }
+        // FIFO 等待应用进入远控时可以长期没有数据；只有实际开始传输后才检查心跳。
+        lock.withLock { streaming = false; lastData = ProcessInfo.processInfo.systemUptime }
         state("waiting")
         var buffer = Data()
         while running && task.isRunning {
             let data = pipe.fileHandleForReading.availableData
             if data.isEmpty { break }
-            lock.withLock { lastData = ProcessInfo.processInfo.systemUptime }
+            lock.withLock { streaming = true; lastData = ProcessInfo.processInfo.systemUptime }
             buffer.append(data)
             var malformed = false
             while let end = buffer.firstIndex(of: 10) {
@@ -141,6 +166,7 @@ final class AdbInputReader {
             }
             if malformed || buffer.count > 4096 { break }
         }
+        lock.withLock { try? streamInput?.close(); streamInput = nil }
         if task.isRunning { task.terminate() }
         task.waitUntilExit()
         try? pipe.fileHandleForReading.close()

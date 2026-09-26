@@ -171,7 +171,7 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // 合并短时间内的计数更新，磁盘操作不进入输入回调。
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             self.statusQueued = false
-            let value: [String: Any] = ["version": "0.4.0", "pid": ProcessInfo.processInfo.processIdentifier,
+            let value: [String: Any] = ["version": "0.4.2", "pid": ProcessInfo.processInfo.processIdentifier,
                 "permission": AXIsProcessTrusted(), "keyboard_tap": false,
                 "scroll_tap": self.tap != nil, "connection": self.connection,
                 "received_actions": self.receivedActions, "finished_actions": self.finishedActions,

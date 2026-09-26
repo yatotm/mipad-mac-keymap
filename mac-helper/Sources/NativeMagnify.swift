@@ -9,6 +9,7 @@ final class NativeMagnify {
     private func post(_ delta: Double, _ phase: Int64) {
         guard NativeGesture.supported, let event = CGEvent(source: source) else { return }
         event.flags = flags.union(.maskNonCoalesced)
+        event.timestamp = DispatchTime.now().uptimeNanoseconds
         event.setIntegerValueField(CGEventField(rawValue: 55)!, value: 29)
         event.setIntegerValueField(CGEventField(rawValue: 110)!, value: 8)
         event.setIntegerValueField(CGEventField(rawValue: 132)!, value: phase)

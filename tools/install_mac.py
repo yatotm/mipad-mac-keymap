@@ -52,8 +52,8 @@ for line in listing.splitlines():
         continue
     helper = any(parts[1] == p or parts[1].startswith(p + " ") for p in executables)
     # Foundation 的子进程可能在 Helper 被终止后继续存活，只结束本插件的读取命令。
-    reader = (parts[1].split(" ", 1)[0].endswith("/adb") and " exec-out su -c 'umask 077; exec 9>" in parts[1]
-              and any(f"/data/user/0/{package}/files/pad_uu_input.pipe 9>&9'" in parts[1]
+    reader = (parts[1].split(" ", 1)[0].endswith("/adb") and "su -c 'umask 077;" in parts[1]
+              and any(f"/data/user/0/{package}/files/pad_uu_input" in parts[1]
                       for package in ["com.netease.uuremote", "com.limelight"]))
     if helper or reader:
         try:
