@@ -1,6 +1,6 @@
 # 收敛版手动验收
 
-本轮使用 **MiPad Moonlight 12.2-pad.1 → Chenxi Mac → Desktop**。Mac 为 Sunshine 内置输入版（PadCursorRevision 2），系统键盘为 1.10；旧 Pad Mac Helper 应处于停止状态。保留原 Mos 和 BetterDisplay 设置。请不要误开保留的官方 Moonlight，它用于回退。
+本轮使用 **MiPad Moonlight 12.2-pad.1 → Chenxi Mac → Desktop**。Mac 为 Sunshine 内置输入版（PadCursorRevision 2），系统键盘为 1.11（更新后需重启平板）；旧 Pad Mac Helper 应处于停止状态。保留原 Mos 和 BetterDisplay 设置。请不要误开保留的官方 Moonlight，它用于回退。
 
 上一版已验收的手感参数和状态机继续沿用；本轮更换了应用接入、传输和会话生命周期，仍需实体回归。优先用蓝牙连接键盘，以免触点固件的已知暂停干扰判断。
 

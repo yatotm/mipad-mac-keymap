@@ -5,10 +5,10 @@
 | 位置 | 当前实现 | 用途 |
 |---|---|---|
 | Android | MiPad Moonlight 12.2-pad.1，`local.pad.moonlight.client` | 直接处理触控板原始事件，在本地绘制光标，经串流发送增强输入 |
-| Android 系统 | Vector 键盘 1.10 | 仅在指定远控窗口前台重映射键盘，受保护的本机广播传递 Fn 功能 |
+| Android 系统 | Vector 键盘 1.11 | 仅在指定远控窗口前台重映射键盘，仅向 Moonlight 传递 Fn 功能，UU 只保留修饰键 |
 | Mac | Sunshine 2026.914.233613，PadCursorRevision 2 / PadInputProtocol 1 | 视频捕获、普通键盘与增强原生输入由同一个进程处理 |
 
-没有独立的增强输入端口、主机发现服务或 Mac Helper。系统键盘模块仍然必要：普通 Android 应用无法可靠阻止 HyperOS 先消费系统快捷键。ADB 仅用于安装和开发，断开它不应影响输入。原官方客户端的数据和已验收旧包保留，可回退。
+没有独立的增强输入端口、主机发现服务或 Mac Helper。系统键盘模块仍然必要：普通 Android 应用无法可靠阻止 HyperOS 先消费系统快捷键。ADB 仅用于安装和开发，断开它不应影响输入。旧包和配置备份保留；旧的应用级输入模块已在 2026-09-27 卸载，恢复旧链路需要一并重新安装对应模块。
 
 ## 传输与状态
 
@@ -70,7 +70,7 @@ Sunshine 使用 `.local/mac-signing-identity` 中的原签名，网页资源从�
 
 1. `python3 tools/install_sunshine.py --restore-previous` 恢复旧 Sunshine。
 2. 从备份恢复 `Pad Mac Helper.app` 到 `~/Applications/`，恢复 `local.pad.uu.ScrollBridge.plist` 到 `~/Library/LaunchAgents/`，用 `launchctl bootstrap gui/$(id -u) <plist绝对路径>` 启动。
-3. 打开保留的官方 Moonlight。系统 1.10 仍兼容官方客户端，通常不必降级。官方客户端的旧 Vector 模块与数据保留；如需恢复系统 1.9，使用备份 APK 完整降级安装并重启。
+3. 使用官方 Moonlight 时，需要重新安装已备份的旧 Moonlight 输入模块、在 Vector 中启用并核对作用域。系统 1.11 仍支持官方 Moonlight 的键位布局；UU 旧完整链路则需要另外恢复相应旧模块和键盘实现。不要回写整个 Vector 数据库。
 
 回退不删除新客户端或任何用户数据，不重新配对旧客户端。辅助功能/录屏授权由 macOS 管理，若新签名被系统要求再次认证，只能按系统流程处理，不能回写 TCC 数据库。
 

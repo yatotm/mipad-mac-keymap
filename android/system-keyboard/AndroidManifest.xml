@@ -1,9 +1,9 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" android:versionCode="11" android:versionName="1.10" package="local.pad.uu.keyboard">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" android:versionCode="12" android:versionName="1.11" package="local.pad.uu.keyboard">
     <uses-sdk android:minSdkVersion="35" android:targetSdkVersion="35" />
     <application android:label="小米 Pad · Mac 键盘直通" android:hasCode="true" android:allowBackup="false">
         <meta-data android:name="xposedmodule" android:value="true" />
         <meta-data android:name="xposedminversion" android:value="82" />
-        <meta-data android:name="xposeddescription" android:value="UU 与 Moonlight 远控：按住左下角 Fn 使用 Mac 功能层，语音键 Control，四叶草 Option，Alt Command。" />
+        <meta-data android:name="xposeddescription" android:value="Moonlight 保留完整 Fn 功能层；UU 只保留语音键 Control、四叶草 Option、Alt Command。无需 Mac Helper。" />
         <meta-data android:name="xposedscope" android:resource="@array/xposed_scope" />
     </application>
 </manifest>

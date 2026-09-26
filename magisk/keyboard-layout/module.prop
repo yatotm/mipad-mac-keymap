@@ -1,6 +1,6 @@
 id=yudi_uu_keyboard_layout
-name=小米 Pad · UU 键盘入口
-version=v1.2
-versionCode=3
+name=小米 Pad · Mac 键盘入口
+version=v1.3
+versionCode=4
 author=Local device repair
-description=为本机小米键盘补齐语音 Fn 与三个缺失功能键，配合 Vector 中的小米 Pad · UU 键盘直通使用。
+description=为小米键盘补齐语音键和缺失功能键的底层入口；Moonlight 与 UU 的修饰键均依赖它。配合 Vector 中的小米 Pad · Mac 键盘直通使用。

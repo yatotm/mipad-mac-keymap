@@ -22,7 +22,7 @@ import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
-/** 仅针对本机系统和已确认的小米键盘，在系统输入链路中实现 UU 专用布局。 */
+/** 仅针对本机系统和已确认的小米键盘，按远控应用选择修饰键或完整功能层。 */
 public final class SystemKeyboard implements IXposedHookLoadPackage {
     private static final String TAG = "PadUuKeyboard";
     private volatile String targetPackage = "";
@@ -90,7 +90,7 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
             for (XC_MethodHook.Unhook hook : installed) hook.unhook();
             throw error;
         }
-        Log.i(TAG, "v1.10 已加载：UU、官方 Moonlight 与定制客户端使用同一键盘布局");
+        Log.i(TAG, "v1.11 已加载：Moonlight 完整功能层，UU 仅修饰键布局");
     }
 
     private boolean isUuWindow(Object window) throws Exception {
@@ -188,6 +188,7 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
     private void sendFunction(Object policy, int index) {
         long generation = focusGeneration;
         String destination = targetPackage;
+        if (!RemoteProfile.functions(destination)) return;
         long when = SystemClock.elapsedRealtime();
         Context context = (Context) XposedHelpers.getObjectField(policy, "mContext");
         functions().post(() -> {
@@ -212,7 +213,7 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
         if (functionRepeat != null) handler.removeCallbacks(functionRepeat);
         frameFinish = () -> {
             int index = bluetoothFn.finishFrame();
-            if (index == 0 || !uuFocused) return;
+            if (index == 0 || !uuFocused || !RemoteProfile.functions(targetPackage)) return;
             sendFunction(policy, index);
             if (!repeatFunction(index)) return;
             int device = fnDevice;
@@ -301,7 +302,7 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
             String key = stroke(group, event);
             int mode = routes.mode(key);
             if (mode < 0 && down) {
-                mode = fn.rowDown(uuFocused && (Boolean) p.args[2], event.getEventTime());
+                mode = fn.rowDown(RemoteProfile.functions(targetPackage) && (Boolean) p.args[2], event.getEventTime());
             }
             mode = routes.record(key, down, mode);
             traceFn(event, group, mode);
