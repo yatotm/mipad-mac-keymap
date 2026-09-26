@@ -28,6 +28,7 @@ import local.pad.uu.touchpad.ScrollMomentum;
 /** 只接管官方 Moonlight 12.2 远控页面中的指定实体触控板。 */
 public final class MoonlightInput implements IXposedHookLoadPackage {
     private InputPipe pipe;
+    private InputDiagnostics diagnostics;
     private final WeakHashMap<Activity, Session> sessions = new WeakHashMap<>();
     private Handler handler;
     private final Set<Integer> heldModifiers = new HashSet<>();
@@ -38,9 +39,11 @@ public final class MoonlightInput implements IXposedHookLoadPackage {
     private boolean checking;
     private final Runnable healthCheck = new Runnable() {
         public void run() {
+            if (diagnostics != null) diagnostics.flush();
             for (Session s : sessions.values()) {
                 if (!receiving(s.activity)) { s.cancel(); releaseKeys(); }
-                else if (InputDevice.getDevice(s.device) == null || !pipe.available()) s.cancel();
+                else if (s.device >= 0 && InputDevice.getDevice(s.device) == null) s.cancel();
+                else if (!pipe.available()) { s.cancelGestures(); s.cursor.close(); }
             }
             checking = !sessions.isEmpty();
             if (checking) handler.postDelayed(this, 250);
@@ -58,6 +61,7 @@ public final class MoonlightInput implements IXposedHookLoadPackage {
                 }
                 handler = new Handler(Looper.getMainLooper());
                 pipe = new InputPipe(app.getFilesDir());
+                diagnostics = new InputDiagnostics(app.getFilesDir());
                 pipe.active(false);
                 new RemoteFunctionReceiver(app, action -> {
                     Activity activity = gameActivity.get();
@@ -83,6 +87,22 @@ public final class MoonlightInput implements IXposedHookLoadPackage {
         moonBridge = XposedHelpers.findClass("com.limelight.nvstream.jni.MoonBridge", p.classLoader);
         XposedHelpers.findMethodExact(moonBridge, "sendMouseMove", short.class, short.class);
         XposedHelpers.findMethodExact(moonBridge, "sendMouseButton", byte.class, byte.class);
+        for (String name : new String[]{"sendMouseMove", "sendMousePosition", "sendMouseButton"}) {
+            XposedBridge.hookAllMethods(moonBridge, name, new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam hook) {
+                    if (diagnostics != null && !name.equals("sendMouseButton")) diagnostics.packet(hook.args);
+                    Activity activity = gameActivity.get();
+                    if (failed || pipe == null || !receiving(activity)) return;
+                    Session s = session(activity);
+                    boolean sent = name.equals("sendMouseMove")
+                            ? s.cursor.move((Short) hook.args[0], (Short) hook.args[1])
+                            : name.equals("sendMousePosition")
+                            ? s.cursor.position((Short) hook.args[0], (Short) hook.args[1], (Short) hook.args[2], (Short) hook.args[3])
+                            : s.cursor.button((Byte) hook.args[1], ((Byte) hook.args[0]) == 7);
+                    if (sent) hook.setResult(null);
+                }
+            });
+        }
         for (String field : new String[]{"connected", "grabbedInput", "modifierFlags", "specialKeyCode", "waitingForAllModifiersUp"}) {
             XposedHelpers.findField(game, field);
         }
@@ -93,22 +113,30 @@ public final class MoonlightInput implements IXposedHookLoadPackage {
             }
         });
         XposedHelpers.findAndHookMethod(game, "handleMotionEvent", View.class, MotionEvent.class, new XC_MethodHook() {
+            @Override protected void afterHookedMethod(MethodHookParam hook) {
+                if (diagnostics == null) return;
+                Activity activity = (Activity) hook.thisObject;
+                MotionEvent event = (MotionEvent) hook.args[1];
+                View stream = (View) XposedHelpers.getObjectField(activity, "streamView");
+                diagnostics.motion(event, supported(event), receiving(activity), stream.hasPointerCapture(),
+                        Boolean.TRUE.equals(hook.getResult()));
+            }
             @Override protected void beforeHookedMethod(MethodHookParam hook) {
                 if (failed || pipe == null) return;
                 Activity activity = (Activity) hook.thisObject;
                 MotionEvent event = (MotionEvent) hook.args[1];
                 Session session = sessions.get(activity);
-                if (event.getActionMasked() == MotionEvent.ACTION_CANCEL && session != null) session.cancel();
+                if (event.getActionMasked() == MotionEvent.ACTION_CANCEL && session != null) {
+                    session.cancel();
+                    if (supported(event)) hook.setResult(true);
+                    return;
+                }
                 if (!supported(event) || !receiving(activity)) return;
                 try {
                     pipe.active(true);
-                    if (!pipe.available()) {
-                        if (session != null) session.cancel();
-                        return;
-                    }
-                    if (session == null) { session = new Session(activity); sessions.put(activity, session); }
-                    if (!checking) { checking = true; handler.postDelayed(healthCheck, 250); }
-                    if (session.motion(event)) hook.setResult(true);
+                    if (session == null) session = session(activity);
+                    session.cursor.inputTime(event.getEventTime());
+                    if (session.motion(event, pipe.available())) hook.setResult(true);
                 } catch (Throwable error) {
                     if (session != null) session.cancel();
                     failed = true;
@@ -132,11 +160,11 @@ public final class MoonlightInput implements IXposedHookLoadPackage {
         });
         XposedBridge.hookAllMethods(game, "onPause", new XC_MethodHook() {
             @Override protected void beforeHookedMethod(MethodHookParam hook) {
+                if (gameActivity.get() == hook.thisObject) gameActivity.clear();
                 Session session = sessions.remove((Activity) hook.thisObject);
                 if (session != null) session.cancel();
                 if (pipe != null) pipe.active(false);
                 releaseKeys();
-                if (gameActivity.get() == hook.thisObject) gameActivity.clear();
             }
         });
         for (String method : new String[]{"handleKeyDown", "handleKeyUp"}) {
@@ -162,7 +190,14 @@ public final class MoonlightInput implements IXposedHookLoadPackage {
                 }
             });
         }
-        Log.i("PadMoonlight", "0.1.0 已加载；不记录按键文字，不修改 Moonlight APK");
+        Log.i("PadMoonlight", "0.2.4 已加载；不记录按键文字，不修改 Moonlight APK");
+    }
+
+    private Session session(Activity activity) {
+        Session s = sessions.get(activity);
+        if (s == null) { s = new Session(activity); sessions.put(activity, s); }
+        if (!checking) { checking = true; handler.postDelayed(healthCheck, 250); }
+        return s;
     }
 
     private void releaseKeys() {
@@ -195,17 +230,22 @@ public final class MoonlightInput implements IXposedHookLoadPackage {
         return range != null && range.getRange() > 0 ? range.getRange() / (axis == 0 ? 120f : 70f) : 25f;
     }
 
-    private final class Session implements GestureEngine.Output {
+    private final class Session implements GestureEngine.Output, PointerEngine.Output {
         final Activity activity;
         final GestureEngine engine = new GestureEngine(this);
+        final PointerEngine pointer = new PointerEngine(this);
+        final CursorOverlay cursor;
         final ScrollMomentum momentum = new ScrollMomentum();
         int device = -1;
         boolean dragging, momentumActive;
         float remainderX, remainderY, dragX, dragY;
         Runnable animation;
-        Session(Activity activity) { this.activity = activity; }
+        Session(Activity activity) {
+            this.activity = activity;
+            cursor = new CursorOverlay((View) XposedHelpers.getObjectField(activity, "streamView"), activity.getFilesDir(), pipe, diagnostics);
+        }
 
-        boolean motion(MotionEvent event) {
+        boolean motion(MotionEvent event, boolean extended) {
             int action = event.getActionMasked();
             if (device != event.getDeviceId()) {
                 if (device >= 0) cancel();
@@ -225,7 +265,12 @@ public final class MoonlightInput implements IXposedHookLoadPackage {
             }
             if (count > 0) { x /= count; y /= count; }
             if (pairs > 0) span /= pairs;
-            return engine.update(action, count, x, y, span, event.getButtonState(), event.getEventTime());
+            pointer.updateButtons(event.getButtonState());
+            if (!extended) cancelGestures();
+            boolean claimed = extended && engine.update(action, count, x, y, span, event.getButtonState(), event.getEventTime());
+            if (claimed) pointer.ignoreContact();
+            else pointer.update(action, count, x, y, event.getEventTime());
+            return true;
         }
 
         void sendScroll(float x, float y, String phase) {
@@ -261,19 +306,27 @@ public final class MoonlightInput implements IXposedHookLoadPackage {
         }
 
         @Override public void dock(int axis, double progress, double velocity, String phase) {
+            if (diagnostics != null) diagnostics.gesture(axis, progress, phase);
             pipe.gesture(axis, progress, velocity, phase);
         }
         @Override public void magnify(double delta, String phase) { pipe.magnify(delta, phase); }
-        @Override public void drag(float x, float y, boolean start) {
-            if (start) {
-                dragging = true; dragX = dragY = 0;
-                XposedHelpers.callStaticMethod(moonBridge, "sendMouseButton", (byte) 7, (byte) 1);
-            }
+        @Override public void button(int button, boolean down) {
+            XposedHelpers.callStaticMethod(moonBridge, "sendMouseButton", (byte) (down ? 7 : 8), (byte) button);
+        }
+        @Override public void move(float x, float y) {
+            if (cursor.move(x, y)) return;
             dragX += x; dragY += y;
             short dx = (short) Math.max(-2048, Math.min(2048, dragX));
             short dy = (short) Math.max(-2048, Math.min(2048, dragY));
             dragX -= dx; dragY -= dy;
             if (dx != 0 || dy != 0) XposedHelpers.callStaticMethod(moonBridge, "sendMouseMove", dx, dy);
+        }
+        @Override public void drag(float x, float y, boolean start) {
+            if (start) {
+                dragging = true; dragX = dragY = 0;
+                XposedHelpers.callStaticMethod(moonBridge, "sendMouseButton", (byte) 7, (byte) 1);
+            }
+            move(x, y);
         }
         @Override public void release() {
             boolean held = dragging;
@@ -288,8 +341,13 @@ public final class MoonlightInput implements IXposedHookLoadPackage {
             animation = null; momentum.stop();
             if (momentumActive) { momentumActive = false; pipe.scroll(0, 0, "momentum-ended"); }
         }
-        void cancel() {
+        void cancelGestures() {
             stopMomentum(); engine.cancel(SystemClock.uptimeMillis()); release();
+        }
+        void cancel() {
+            cancelGestures(); pointer.cancel();
+            cursor.close();
+            dragX = dragY = 0;
             if (pipe != null) pipe.reset();
         }
     }

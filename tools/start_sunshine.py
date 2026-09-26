@@ -33,7 +33,7 @@ else:
     raise SystemExit("旧 Sunshine 服务尚未退出，停止重复启动。")
 agent = home / "Library/LaunchAgents" / (label + ".plist")
 agent.parent.mkdir(parents=True, exist_ok=True)
-agent.write_bytes(plistlib.dumps({
+settings = {
     "Label": label,
     "ProgramArguments": [str(binary), str(config)],
     "RunAtLoad": True,
@@ -42,6 +42,9 @@ agent.write_bytes(plistlib.dumps({
     "StandardOutPath": "/dev/null",
     "StandardErrorPath": "/dev/null",
     "ProcessType": "Interactive",
-}))
+}
+if (binary.parent.parent / "Resources/pad-local-cursor.json").is_file():
+    settings["EnvironmentVariables"] = {"PAD_LOCAL_CURSOR": "1"}
+agent.write_bytes(plistlib.dumps(settings))
 subprocess.run(["launchctl", "bootstrap", domain, str(agent)], check=True)
 print("Sunshine 已注册；这是串流服务，输入适配仍由唯一的 Pad Mac Helper 负责。")

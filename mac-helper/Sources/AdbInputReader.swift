@@ -31,7 +31,7 @@ final class AdbInputReader {
                 if self.streaming && ProcessInfo.processInfo.systemUptime - self.lastData > 4 {
                     try? self.streamInput?.close()
                     self.streamInput = nil
-                    self.process?.terminate()
+                    if self.process?.isRunning == true { self.process?.terminate() }
                 }
             }
         }
@@ -49,6 +49,13 @@ final class AdbInputReader {
         }
         watchdog?.cancel()
         watchdog = nil
+    }
+
+    func reconnect() {
+        lock.withLock {
+            try? streamInput?.close(); streamInput = nil
+            if process?.isRunning == true { process?.terminate() }
+        }
     }
 
     private func state(_ value: String) {
@@ -133,10 +140,19 @@ final class AdbInputReader {
 
     private func read(_ config: ConnectionConfiguration, device: String) {
         let base = "/data/user/0/\(package)/files/pad_uu_input"
+        let capabilities = package == "com.limelight" ? """
+        pad_caps=\(base).pointer.json
+        pad_uid=$(stat -c %u /data/user/0/\(package)/files)
+        printf '%s' '\(NativePointer.capabilities())' > "$pad_caps.tmp"
+        chown "$pad_uid:$pad_uid" "$pad_caps.tmp"
+        restorecon -F "$pad_caps.tmp" >/dev/null 2>&1
+        mv "$pad_caps.tmp" "$pad_caps"
+        """ : ""
         // stdin 只充当生命周期信号，不接收命令。Mac 退出或 ADB 断线后 EOF 会清理 root 子进程和锁。
         let script = """
         umask 077; exec 2>/dev/null; exec 9>\(base).lock
         flock -n 9 9>&9 || exit 75
+        \(capabilities)
         exec 8<&0
         cat \(base).pipe & pad_reader=$!
         (while IFS= read -r pad_lease; do :; done; kill "$pad_reader" 2>/dev/null) <&8 &

@@ -70,6 +70,13 @@ public final class GestureEngineTest {
         check(out.position > 0 && out.phases.equals(List.of("zoom:began", "zoom:changed")));
         engine.update(6, 1, 10, 0, 0, 0, 6030);
         check(out.phases.get(out.phases.size()-1).equals("zoom:ended"));
+        out.phases.clear();
+        engine.update(0, 1, 0, 0, 0, 0, 7000);
+        engine.update(5, 3, 0, 0, 20, 0, 7010);
+        engine.update(2, 3, 0, -0.4f, 20, 0, 7040);
+        engine.update(2, 3, 0, -1.3f, 20, 0, 7400);
+        check(out.phases.contains("dock2:began") && out.press == 1);
+        engine.cancel(7410);
         System.out.println("触点增减、半程保持/反向、取消、拖拽释放与捏合隔离检查通过。");
     }
 }

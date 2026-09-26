@@ -1,0 +1,118 @@
+diff --git a/src/platform/macos/av_video.h b/src/platform/macos/av_video.h
+index 8832f32..59ad1a6 100644
+--- a/src/platform/macos/av_video.h
++++ b/src/platform/macos/av_video.h
+@@ -21,6 +21,19 @@ struct CaptureSession {
+  */
+ @interface AVVideo: NSObject <AVCaptureVideoDataOutputSampleBufferDelegate>
+ 
++/**
++ * @brief 下一次检查本地光标状态的单调时钟时间。
++ */
++@property (nonatomic, assign) NSTimeInterval padNextCursorCheck;
++/**
++ * @brief 本机构建的光标扩展开关。
++ */
++@property (nonatomic, assign) BOOL padLocalCursorEnabled;
++/**
++ * @brief 防止多个捕获回调重复检查状态；不与会话停止共用锁。
++ */
++@property (nonatomic, retain) NSLock *padCursorLock;
++
+ /**
+  * @brief Display ID property.
+  */
+diff --git a/src/platform/macos/av_video.m b/src/platform/macos/av_video.m
+index 5ad931c..6df1544 100644
+--- a/src/platform/macos/av_video.m
++++ b/src/platform/macos/av_video.m
+@@ -4,6 +4,7 @@
+  */
+ // local includes
+ #import "av_video.h"
++#import "pad_cursor.h"
+ 
+ @implementation AVVideo
+ 
+@@ -16,6 +17,8 @@ - (id)initWithDisplay:(CGDirectDisplayID)displayID frameRate:(int)frameRate {
+     return nil;
+   }
+ 
++  self.padLocalCursorEnabled = getenv("PAD_LOCAL_CURSOR") != NULL && strcmp(getenv("PAD_LOCAL_CURSOR"), "1") == 0;
++  self.padCursorLock = [[[NSLock alloc] init] autorelease];
+   self.displayID = displayID;
+   self.pixelFormat = kCVPixelFormatType_32BGRA;
+   self.frameWidth = (int) CGDisplayModeGetPixelWidth(mode);
+@@ -48,6 +51,7 @@ - (void)dealloc {
+   [self.captureCallbacks release];
+   [self.captureSignals release];
+   [self.session stopRunning];
++  [self.padCursorLock release];
+   [super dealloc];
+ }
+ 
+@@ -96,6 +100,23 @@ - (dispatch_semaphore_t)capture:(FrameCallbackBlock)frameCallback {
+ - (void)captureOutput:(AVCaptureOutput *)captureOutput
+   didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
+          fromConnection:(AVCaptureConnection *)connection {
++  if (self.padLocalCursorEnabled && [self.padCursorLock tryLock]) {
++    NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
++    if (now >= self.padNextCursorCheck) {
++      self.padNextCursorCheck = now + 0.25;
++      NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/Pad UU/helper-status.json"];
++      BOOL captures = !pad_local_cursor_active(path, [NSDate date]);
++      for (AVCaptureInput *input in self.session.inputs) {
++        if ([input isKindOfClass:[AVCaptureScreenInput class]]) {
++          AVCaptureScreenInput *screen = (AVCaptureScreenInput *) input;
++          if (screen.capturesCursor != captures) {
++            screen.capturesCursor = captures;
++          }
++        }
++      }
++    }
++    [self.padCursorLock unlock];
++  }
+   FrameCallbackBlock callback = [self.captureCallbacks objectForKey:connection];
+ 
+   if (callback != nil) {
+diff --git a/src/platform/macos/pad_cursor.h b/src/platform/macos/pad_cursor.h
+new file mode 100644
+index 0000000..c7ef2b7
+--- /dev/null
++++ b/src/platform/macos/pad_cursor.h
+@@ -0,0 +1,35 @@
++/**
++ * @file src/platform/macos/pad_cursor.h
++ * @brief 根据有时效的本地光标状态决定是否录制服务端箭头。
++ */
++#import <Foundation/Foundation.h>
++#include <signal.h>
++#include <limits.h>
++
++/**
++ * @brief 只在 Helper 在线且状态新鲜时关闭视频里的重复光标。
++ * @param path Helper 覆盖写入的状态文件。
++ * @param now 当前时间，用于拒绝旧状态和未来时间。
++ * @return 本地光标是否有效；缺失、异常或失联均回退到视频光标。
++ */
++static BOOL pad_local_cursor_active(NSString *path, NSDate *now) {
++  NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:NULL];
++  NSDate *modified = attrs[NSFileModificationDate];
++  if (modified == nil || [attrs[NSFileSize] unsignedLongLongValue] > 4096) {
++    return NO;
++  }
++  NSTimeInterval age = [now timeIntervalSinceDate:modified];
++  if (age < -1 || age > 3.5) {
++    return NO;
++  }
++  NSData *data = [NSData dataWithContentsOfFile:path];
++  id status = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL] : nil;
++  if (![status isKindOfClass:[NSDictionary class]] ||
++      ![status[@"local_cursor"] isEqual:@YES] ||
++      ![status[@"moonlight_connection"] isEqual:@"connected"] ||
++      ![status[@"pid"] isKindOfClass:[NSNumber class]]) {
++    return NO;
++  }
++  long long pid = [status[@"pid"] longLongValue];
++  return pid > 0 && pid <= INT_MAX && kill((pid_t) pid, 0) == 0;
++}

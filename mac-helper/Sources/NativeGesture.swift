@@ -6,6 +6,7 @@ final class NativeGesture {
     private let source = CGEventSource(stateID: .combinedSessionState)
     private var axis: Int?
     private var progress: Double = 0
+    private var start = MotionPhaseStart()
 
     static var supported: Bool { ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 15 }
 
@@ -38,7 +39,7 @@ final class NativeGesture {
     }
 
     private func post(_ axis: Int, _ progress: Double, _ velocity: Double, _ phase: String) {
-        guard Self.supported else { return }
+        guard Self.supported, let phase = start.phase(phase, moved: progress != 0) else { return }
         Self.event(source: source, axis: axis, progress: progress, velocity: velocity, phase: phase)?
             .post(tap: .cgSessionEventTap)
     }

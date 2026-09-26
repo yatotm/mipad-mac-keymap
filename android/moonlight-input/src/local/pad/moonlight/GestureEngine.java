@@ -13,7 +13,7 @@ public final class GestureEngine {
     private final Output output;
     private int mode, fingers, axis;
     private float originX, originY, originSpan, lastX, lastY, lastSpan;
-    private long began, sampleTime;
+    private long began, sampleTime, movedAt;
     private double progress, velocity;
     public GestureEngine(Output output) { this.output = output; }
     public boolean captured() { return mode != IDLE; }
@@ -56,6 +56,7 @@ public final class GestureEngine {
             if (count < 2) return false;
             finish(time, true);
             mode = WAIT; fingers = count; began = sampleTime = time;
+            movedAt = -1;
             originX = lastX = x; originY = lastY = y; originSpan = lastSpan = span;
             progress = velocity = 0;
             return true;
@@ -64,6 +65,8 @@ public final class GestureEngine {
         float dx = x - originX, dy = y - originY;
         double travel = Math.hypot(dx, dy), shape = originSpan - span;
         if (mode == WAIT) {
+            // 停留时间截止于开始移动，不能把缓慢起步的导航误判成停留拖拽。
+            if (travel >= 0.35 && movedAt < 0) movedAt = time;
             if (fingers == 2) {
                 if (originSpan >= 5 && Math.abs(shape) >= 1 && Math.abs(shape) > travel * 1.5) {
                     mode = ZOOM;
@@ -77,7 +80,7 @@ public final class GestureEngine {
                 mode = DOCK; axis = 3;
                 output.dock(axis, 0, 0, "began");
             } else if (travel >= 1.2 && travel > Math.abs(shape) * 1.3) {
-                if (fingers == 3 && time - began >= 300) {
+                if (fingers == 3 && movedAt - began >= 300) {
                     mode = DRAG;
                     output.drag(0, 0, true);
                 } else {

@@ -1,6 +1,25 @@
 import Foundation
 import CoreGraphics
 
+// 首笔真实位移与开始阶段一起发出，避免用没有方向的零位移启动系统手势。
+struct MotionPhaseStart {
+    private var pending: String?
+
+    mutating func phase(_ phase: String, moved: Bool) -> String? {
+        if phase == "began" || phase == "momentum-began" {
+            pending = moved ? nil : phase
+            return moved ? phase : nil
+        }
+        guard let start = pending else { return phase }
+        if phase == (start == "began" ? "changed" : "momentum-changed") && moved {
+            pending = nil
+            return start
+        }
+        if phase == "ended" || phase == "cancelled" || phase == "momentum-ended" { pending = nil }
+        return nil
+    }
+}
+
 // 输入协议只接受固定动作、像素滚动和手势，不包含任意命令、文件路径或文字输入。
 struct InputFrame: Decodable {
     let v: Int
@@ -14,6 +33,11 @@ struct InputFrame: Decodable {
     let axis: Int?
     let progress: Double?
     let velocity: Double?
+    let w: Int32?
+    let h: Int32?
+    let button: Int?
+    let down: Bool?
+    let local: Bool?
 
     static let actions: Set<String> = ["brightness-down", "brightness-up", "mic-mute", "screenshot",
         "assistant", "sleep", "previous", "play-pause", "next", "mute", "volume-down", "volume-up",
@@ -41,6 +65,13 @@ struct InputFrame: Decodable {
         case "magnify":
             guard let delta = frame.progress, delta.isFinite, abs(delta) <= 0.5,
                   let phase = frame.phase, ["began", "changed", "ended", "cancelled"].contains(phase),
+                  let mods = frame.mods, (0...0x7fffffff).contains(mods) else { return nil }
+        case "position":
+            guard let x = frame.x, let y = frame.y, let w = frame.w, let h = frame.h,
+                  (1...32767).contains(w), (1...32767).contains(h), (0...w).contains(x), (0...h).contains(y),
+                  frame.local != nil, let mods = frame.mods, (0...0x7fffffff).contains(mods) else { return nil }
+        case "button":
+            guard let button = frame.button, (1...3).contains(button), frame.down != nil,
                   let mods = frame.mods, (0...0x7fffffff).contains(mods) else { return nil }
         case "reset": break
         default: return nil

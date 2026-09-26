@@ -26,9 +26,11 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var reader: AdbInputReader?
     private var moonlightReader: AdbInputReader?
     private var moonlightClock = InputClock()
-    private let moonlightScroll = NativeScroll()
+    private let moonlightScroll = NativeScroll(horizontalScale: 3)
     private let moonlightGesture = NativeGesture()
     private let moonlightMagnify = NativeMagnify()
+    private let moonlightPointer = NativePointer()
+    private var displayObserver: NSObjectProtocol?
     private var moonlightConnection = "stopped"
     private var moonlightFrames = 0
     private var inputClock = InputClock()
@@ -157,10 +159,16 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.moonlightScroll.reset()
             self.moonlightGesture.reset()
             self.moonlightMagnify.reset()
+            self.moonlightPointer.reset()
             self.writeStatus()
         })
         moonlightReader = moonlight
         moonlight.start()
+        displayObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
+                                                                 object: nil, queue: .main) { [weak self] _ in
+            self?.moonlightPointer.reset()
+            self?.moonlightReader?.reconnect()
+        }
         stateLabel?.stringValue = "正在连接平板输入通道"
         writeStatus()
     }
@@ -171,12 +179,14 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // 合并短时间内的计数更新，磁盘操作不进入输入回调。
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             self.statusQueued = false
-            let value: [String: Any] = ["version": "0.4.2", "pid": ProcessInfo.processInfo.processIdentifier,
+            let value: [String: Any] = ["version": "0.5.4", "pid": ProcessInfo.processInfo.processIdentifier,
                 "permission": AXIsProcessTrusted(), "keyboard_tap": false,
                 "scroll_tap": self.tap != nil, "connection": self.connection,
                 "received_actions": self.receivedActions, "finished_actions": self.finishedActions,
                 "received_scroll": self.receivedScroll, "rejected_frames": self.rejectedFrames,
                 "moonlight_connection": self.moonlightConnection, "moonlight_frames": self.moonlightFrames,
+                "pointer_frames": self.moonlightPointer.received, "pointer_buttons": self.moonlightPointer.heldButtons,
+                "local_cursor": self.moonlightPointer.localCursorActive,
                 "native_gesture_os_supported": NativeGesture.supported]
             self.statusWriter.async {
                 try? FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
@@ -234,6 +244,7 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func receiveMoonlight(_ frame: InputFrame) {
         guard moonlightClock.accepts(frame, now: ProcessInfo.processInfo.systemUptime) else {
             moonlightScroll.reset(); moonlightGesture.reset(); moonlightMagnify.reset()
+            moonlightPointer.reset()
             rejectedFrames += 1
             return
         }
@@ -241,11 +252,13 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
         stateLabel?.stringValue = "Moonlight 输入已连接"
         moonlightFrames += 1
         switch frame.t {
+        case "position", "button": moonlightPointer.receive(frame)
+        case "hello": moonlightPointer.configure()
         case "scroll": moonlightScroll.receive(frame)
         case "gesture": moonlightGesture.receive(frame)
         case "magnify": moonlightMagnify.receive(frame)
         case "action": if let action = frame.a { enqueue(action) }
-        case "reset": moonlightScroll.reset(); moonlightGesture.reset(); moonlightMagnify.reset()
+        case "reset": moonlightScroll.reset(); moonlightGesture.reset(); moonlightMagnify.reset(); moonlightPointer.reset()
         default: break
         }
         let now = ProcessInfo.processInfo.systemUptime
@@ -357,6 +370,9 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
         reader?.stop(); reader = nil
         moonlightReader?.stop(); moonlightReader = nil
         moonlightScroll.reset(); moonlightGesture.reset(); moonlightMagnify.reset()
+        moonlightPointer.reset()
+        if let displayObserver { NotificationCenter.default.removeObserver(displayObserver) }
+        displayObserver = nil
         moonlightClock = InputClock(); moonlightConnection = "stopped"
         nativeScroll.reset()
         cancelHorizontalNavigation()

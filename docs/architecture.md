@@ -1,6 +1,6 @@
 # 输入链路
 
-本文描述已验收的 UU 基线路径。Moonlight 的连续手势实现、系统权限阻塞和待验收项目另见 [Moonlight 输入适配](moonlight-input.md)。
+本文描述已验收的 UU 基线路径。Moonlight 的连续手势实现、本地光标与待验收项目另见 [Moonlight 输入适配](moonlight-input.md)。
 
 平板端两个 Vector 作用域职责分开：系统模块在小米快捷键拦截之前选择路由，UU 模块处理远控消息和触控板动作。Mac 端只有一个 `Pad Mac Helper.app` 和一个 launchd 项。
 
@@ -64,7 +64,7 @@ CoreAudio 负责音量/静音；已有 BetterDisplay 负责亮度；系统应用
 
 `connection.json` 与输入处理分开，支持域名/IPv4/IPv6 地址格式，未来可用 Tailscale 地址或 MagicDNS。**固定 23333 模块目前仅转发 Wi-Fi IPv4 地址**，VPN 入站路由和端口转发还需适配。本版不改变 VPN 或监听范围。
 
-完整虚拟多点 HID 设备尚未实现。Moonlight 分支已实现按位移更新、带开始和结束阶段的系统手势通道，实际跟手效果仍待授权后的实机验证。现成 Karabiner DriverKit 项目主要提供键盘/鼠标。实验与已验证路径分开，按单项真实行为验收后再切换。
+完整虚拟多点 HID 设备尚未实现。Moonlight 分支已实现按位移更新、带开始和结束阶段的系统手势通道，用户已确认主要手势正常；延迟、通知方向和横向灵敏度的后续调整单独验收。现成 Karabiner DriverKit 项目主要提供键盘/鼠标。实验与已验证路径分开，按单项真实行为验收后再切换。
 
 ## 数据与诊断
 
@@ -83,3 +83,7 @@ Mac 只覆盖 `~/Library/Application Support/Pad UU/helper-status.json` 和 `las
 
 - [Linux 官方 HID Consumer 映射](https://github.com/torvalds/linux/blob/master/drivers/hid/hid-input.c)：`0x70`/`0x6F` 亮度、`0xEA`/`0xE9` 音量及媒体用途码。
 - [Android BroadcastReceiver.getSentFromUid](https://developer.android.com/reference/android/content/BroadcastReceiver#getSentFromUid()) 和 [BroadcastOptions.setShareIdentityEnabled](https://developer.android.com/reference/android/app/BroadcastOptions#setShareIdentityEnabled(boolean))：向接收方提供真实发送者身份。
+
+## Moonlight 指针与显示器
+
+Moonlight 模块直接读取指定小米触控板的原始坐标并在平板绘制光标，普通指针和拖拽通过同一 ADB 输入通道交给 Helper。位置帧带视频参考尺寸；Mac 用当前主显示器的逻辑边界扣除黑边并定位，显示配置变化时重新发布尺寸。普通键盘仍通过 Moonlight/Sunshine。此路由没有新增后台 App，也不改变 UU 当前的指针路径。

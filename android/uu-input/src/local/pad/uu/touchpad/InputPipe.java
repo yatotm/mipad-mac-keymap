@@ -105,6 +105,17 @@ public final class InputPipe {
         catch (Exception ignored) { return false; }
     }
 
+    public synchronized boolean pointerPosition(int x, int y, int width, int height) {
+        try { return send(packet("position").put("x", x).put("y", y).put("w", width).put("h", height)
+                .put("local", true).put("mods", modifiers)); }
+        catch (Exception ignored) { return false; }
+    }
+
+    public synchronized boolean pointerButton(int button, boolean down) {
+        try { return send(packet("button").put("button", button).put("down", down).put("mods", modifiers)); }
+        catch (Exception ignored) { return false; }
+    }
+
     public synchronized void active(boolean value) {
         if (active == value) return;
         if (!value) { reset(); close(); }
