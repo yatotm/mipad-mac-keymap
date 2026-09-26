@@ -8,6 +8,7 @@ final class NativePointer {
     private var lastPosted: CGPoint?
     private var hidden = false
     private var target = configuredDisplay()
+    private var explicitBounds: CGRect?
     private(set) var received = 0
     private var flags = CGEventFlags()
     private var lastClick: (button: Int, at: Double, point: CGPoint, count: Int)?
@@ -25,7 +26,12 @@ final class NativePointer {
         return nil
     }
 
-    func configure() { reset(); target = Self.configuredDisplay() }
+    func configure() { reset(); target = Self.configuredDisplay(); explicitBounds = nil }
+
+    // Sunshine 直接传入实际捕获屏幕，不再读取启动时缓存的主屏。
+    func configure(display: CGDirectDisplayID, bounds: CGRect) {
+        reset(); target = display; explicitBounds = bounds
+    }
 
     static func capabilities() -> String {
         let bounds = CGDisplayBounds(configuredDisplay() ?? CGMainDisplayID())
@@ -59,7 +65,7 @@ final class NativePointer {
         received += 1
         flags = androidModifiers(frame.mods ?? 0)
         if frame.t == "position", let x = frame.x, let y = frame.y, let width = frame.w, let height = frame.h {
-            let bounds = CGDisplayBounds(target ?? CGMainDisplayID())
+            let bounds = explicitBounds ?? CGDisplayBounds(target ?? CGMainDisplayID())
             guard bounds.width > 0, bounds.height > 0 else { reset(); return }
             point = Self.map(x: Double(x), y: Double(y), width: Double(width), height: Double(height), bounds: bounds)
             if frame.local == true && !hidden {

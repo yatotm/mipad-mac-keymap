@@ -1,5 +1,7 @@
 # Moonlight 输入适配
 
+> 当前内置版请看 [收敛实现](converged-input.md)。本页保留旧 Helper / Vector 应用模块链路的历史说明，不代表当前运行组成。
+
 这条路径与已验收的 UU 路径并存。分辨率和 BetterDisplay 配置不在本次改动范围内。
 
 ## 当前交付状态

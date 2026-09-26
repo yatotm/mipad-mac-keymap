@@ -1,0 +1,259 @@
+diff --git a/cmake/targets/macos.cmake b/cmake/targets/macos.cmake
+index a170776..d18cd18 100644
+--- a/cmake/targets/macos.cmake
++++ b/cmake/targets/macos.cmake
+@@ -24,3 +24,11 @@ endif()
+ 
+ # Tell linker to dynamically load these symbols at runtime, in case they're unavailable:
+ target_link_options(sunshine PRIVATE -Wl,-U,_CGPreflightScreenCaptureAccess -Wl,-U,_CGRequestScreenCaptureAccess)
++
++# 输入代码静态链接到 Sunshine，不启动独立 Helper。
++if(NOT PAD_INPUT_ARCHIVE OR NOT PAD_INPUT_ROOT OR NOT PAD_PROTOCOL_ROOT)
++    message(FATAL_ERROR "Pad input source/archive paths are required for this build")
++endif()
++target_include_directories(sunshine PRIVATE "${PAD_INPUT_ROOT}" "${PAD_PROTOCOL_ROOT}")
++target_link_libraries(sunshine "${PAD_INPUT_ARCHIVE}")
++target_link_options(sunshine PRIVATE "-L${PAD_SWIFT_RUNTIME}" "-L${PAD_SWIFT_SDK}" "-Wl,-rpath,/usr/lib/swift")
+diff --git a/src/platform/macos/av_video.h b/src/platform/macos/av_video.h
+index 8832f32..59ad1a6 100644
+--- a/src/platform/macos/av_video.h
++++ b/src/platform/macos/av_video.h
+@@ -21,6 +21,19 @@ struct CaptureSession {
+  */
+ @interface AVVideo: NSObject <AVCaptureVideoDataOutputSampleBufferDelegate>
+ 
++/**
++ * @brief 下一次检查本地光标状态的单调时钟时间。
++ */
++@property (nonatomic, assign) NSTimeInterval padNextCursorCheck;
++/**
++ * @brief 本机构建的光标扩展开关。
++ */
++@property (nonatomic, assign) BOOL padLocalCursorEnabled;
++/**
++ * @brief 防止多个捕获回调重复检查状态；不与会话停止共用锁。
++ */
++@property (nonatomic, retain) NSLock *padCursorLock;
++
+ /**
+  * @brief Display ID property.
+  */
+diff --git a/src/platform/macos/av_video.m b/src/platform/macos/av_video.m
+index 5ad931c..66faf89 100644
+--- a/src/platform/macos/av_video.m
++++ b/src/platform/macos/av_video.m
+@@ -4,6 +4,8 @@
+  */
+ // local includes
+ #import "av_video.h"
++#import "pad_cursor.h"
++#import "pad_native.h"
+ 
+ @implementation AVVideo
+ 
+@@ -16,7 +18,10 @@ - (id)initWithDisplay:(CGDirectDisplayID)displayID frameRate:(int)frameRate {
+     return nil;
+   }
+ 
++  self.padLocalCursorEnabled = getenv("PAD_LOCAL_CURSOR") != NULL && strcmp(getenv("PAD_LOCAL_CURSOR"), "1") == 0;
++  self.padCursorLock = [[[NSLock alloc] init] autorelease];
+   self.displayID = displayID;
++  pad_native_capture_display(displayID);
+   self.pixelFormat = kCVPixelFormatType_32BGRA;
+   self.frameWidth = (int) CGDisplayModeGetPixelWidth(mode);
+   self.frameHeight = (int) CGDisplayModeGetPixelHeight(mode);
+@@ -48,6 +53,7 @@ - (void)dealloc {
+   [self.captureCallbacks release];
+   [self.captureSignals release];
+   [self.session stopRunning];
++  [self.padCursorLock release];
+   [super dealloc];
+ }
+ 
+@@ -96,6 +102,23 @@ - (dispatch_semaphore_t)capture:(FrameCallbackBlock)frameCallback {
+ - (void)captureOutput:(AVCaptureOutput *)captureOutput
+   didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
+          fromConnection:(AVCaptureConnection *)connection {
++  if ([self.padCursorLock tryLock]) {
++    NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
++    if (now >= self.padNextCursorCheck) {
++      self.padNextCursorCheck = now + 0.25;
++      NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/Pad UU/helper-status.json"];
++      BOOL captures = !(pad_native_cursor_active() || (self.padLocalCursorEnabled && pad_local_cursor_active(path, [NSDate date])));
++      for (AVCaptureInput *input in self.session.inputs) {
++        if ([input isKindOfClass:[AVCaptureScreenInput class]]) {
++          AVCaptureScreenInput *screen = (AVCaptureScreenInput *) input;
++          if (screen.capturesCursor != captures) {
++            screen.capturesCursor = captures;
++          }
++        }
++      }
++    }
++    [self.padCursorLock unlock];
++  }
+   FrameCallbackBlock callback = [self.captureCallbacks objectForKey:connection];
+ 
+   if (callback != nil) {
+diff --git a/src/platform/macos/pad_cursor.h b/src/platform/macos/pad_cursor.h
+new file mode 100644
+index 0000000..c7ef2b7
+--- /dev/null
++++ b/src/platform/macos/pad_cursor.h
+@@ -0,0 +1,35 @@
++/**
++ * @file src/platform/macos/pad_cursor.h
++ * @brief 根据有时效的本地光标状态决定是否录制服务端箭头。
++ */
++#import <Foundation/Foundation.h>
++#include <signal.h>
++#include <limits.h>
++
++/**
++ * @brief 只在 Helper 在线且状态新鲜时关闭视频里的重复光标。
++ * @param path Helper 覆盖写入的状态文件。
++ * @param now 当前时间，用于拒绝旧状态和未来时间。
++ * @return 本地光标是否有效；缺失、异常或失联均回退到视频光标。
++ */
++static BOOL pad_local_cursor_active(NSString *path, NSDate *now) {
++  NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:NULL];
++  NSDate *modified = attrs[NSFileModificationDate];
++  if (modified == nil || [attrs[NSFileSize] unsignedLongLongValue] > 4096) {
++    return NO;
++  }
++  NSTimeInterval age = [now timeIntervalSinceDate:modified];
++  if (age < -1 || age > 3.5) {
++    return NO;
++  }
++  NSData *data = [NSData dataWithContentsOfFile:path];
++  id status = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL] : nil;
++  if (![status isKindOfClass:[NSDictionary class]] ||
++      ![status[@"local_cursor"] isEqual:@YES] ||
++      ![status[@"moonlight_connection"] isEqual:@"connected"] ||
++      ![status[@"pid"] isKindOfClass:[NSNumber class]]) {
++    return NO;
++  }
++  long long pid = [status[@"pid"] longLongValue];
++  return pid > 0 && pid <= INT_MAX && kill((pid_t) pid, 0) == 0;
++}
+diff --git a/src/rtsp.cpp b/src/rtsp.cpp
+index c7135dd..67e9c11 100644
+--- a/src/rtsp.cpp
++++ b/src/rtsp.cpp
+@@ -25,6 +25,10 @@ extern "C" {
+ #include "config.h"
+ #include "globals.h"
+ #include "input.h"
++#include "pad_input.h"
++#ifdef __APPLE__
++#include "pad_native.h"
++#endif
+ #include "logging.h"
+ #include "network.h"
+ #include "rtsp.h"
+@@ -925,7 +929,11 @@ namespace rtsp_stream {
+     std::stringstream ss;
+ 
+     // Tell the client about our supported features
+-    ss << "a=x-ss-general.featureFlags:" << (uint32_t) platf::get_capabilities() << std::endl;
++    uint32_t features = (uint32_t) platf::get_capabilities();
++#ifdef __APPLE__
++    if (pad_native_supported()) { features |= PAD_FEATURE_FLAG; }
++#endif
++    ss << "a=x-ss-general.featureFlags:" << features << std::endl;
+ 
+     // Always request new control stream encryption if the client supports it
+     uint32_t encryption_flags_supported = SS_ENC_CONTROL_V2 | SS_ENC_AUDIO;
+diff --git a/src/stream.cpp b/src/stream.cpp
+index 1291c9c..b014acb 100644
+--- a/src/stream.cpp
++++ b/src/stream.cpp
+@@ -27,6 +27,7 @@ extern "C" {
+ #include "display_device.h"
+ #include "globals.h"
+ #include "input.h"
++#include "pad_session.h"
+ #include "logging.h"
+ #include "network.h"
+ #include "platform/common.h"
+@@ -487,6 +488,7 @@ namespace stream {
+    * @brief Runtime state for one audio/video streaming session.
+    */
+   struct session_t {
++    pad::session_t pad_input;  ///< 已配对会话的增强输入后端。
+     config_t config;  ///< Stream or encoder configuration captured for the worker.
+ 
+     safe::mail_t mail;  ///< Mailbox used to distribute packets and lifecycle events.
+@@ -1156,6 +1158,39 @@ namespace stream {
+     return 0;
+   }
+ 
++  /**
++   * @brief 将增强输入交给会话后端，普通键鼠保持原处理。
++   */
++  void receive_pad_or_standard_input(session_t *session, std::vector<std::uint8_t> &&bytes) {
++    if (pad::matches(bytes)) {
++      if (session->state.load(std::memory_order_relaxed) == session::state_e::RUNNING &&
++          session->config.controlProtocolType == 13 && session->pad_input.receive(bytes) == 2) {
++        input::reset(session->input);
++      }
++      return;
++    }
++    input::passthrough(session->input, std::move(bytes));
++  }
++
++  /**
++   * @brief 在现有加密控制连接回传显示元数据，不访问独立网络服务。
++   */
++  void send_pad_state(session_t *session) {
++    if (session->pad_input.tick()) {
++      input::reset(session->input);
++    }
++    const auto state = session->pad_input.state();
++    if (state.empty() || state.size() > PAD_STATE_MAX) { return; }
++    control_header_v2 header {};
++    header.type = util::endian::little<std::uint16_t>(PAD_STATE_TYPE);
++    header.payloadLength = util::endian::little<std::uint16_t>(state.size());
++    std::string plaintext(reinterpret_cast<const char *>(&header), sizeof(header));
++    plaintext += state;
++    std::array<std::uint8_t, PAD_STATE_MAX + 128> encrypted {};
++    const auto payload = encode_control(session, plaintext, encrypted);
++    session->broadcast_ref->control_server.send(payload, session->control.peer);
++  }
++
+   /**
+    * @brief Run the broadcast control-channel worker thread.
+    *
+@@ -1232,7 +1267,7 @@ namespace stream {
+         std::copy(payload.end() - 16, payload.end(), std::begin(iv));
+       }
+ 
+-      input::passthrough(session->input, std::move(plaintext));
++      receive_pad_or_standard_input(session, std::move(plaintext));
+     });
+ 
+     server->map(packetTypes[IDX_ENCRYPTED], [server](session_t *session, const std::string_view &payload) {
+@@ -1295,7 +1330,7 @@ namespace stream {
+       // IDX_INPUT_DATA callback will attempt to decrypt unencrypted data, therefore we need pass it directly
+       if (type == packetTypes[IDX_INPUT_DATA]) {
+         plaintext.erase(std::begin(plaintext), std::begin(plaintext) + 4);
+-        input::passthrough(session->input, std::move(plaintext));
++        receive_pad_or_standard_input(session, std::move(plaintext));
+       } else {
+         server->call(type, session, next_payload, true);
+       }
+@@ -1354,6 +1389,7 @@ namespace stream {
+           if (!session->control.peer) {
+             has_session_awaiting_peer = true;
+           } else {
++            send_pad_state(session);
+             auto &feedback_queue = session->control.feedback_queue;
+             while (feedback_queue->peek()) {
+               auto feedback_msg = feedback_queue->pop();
+@@ -2205,6 +2241,7 @@ namespace stream {
+         return;
+       }
+ 
++      session.pad_input.stop();
+       session.shutdown_event->raise(true);
+     }
+ 

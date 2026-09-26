@@ -1,5 +1,7 @@
 # Sunshine 本地光标捕获补丁
 
+> 当前内置版请看 [收敛实现](converged-input.md)。本页保留旧 Helper / Vector 应用模块链路的历史说明，不代表当前运行组成。
+
 客户端在平板绘制箭头后，官方 macOS 捕获端仍会把 Mac 箭头编码进视频。用户已确认蓝色本地箭头跟手，同时有黑色远端箭头滞后；只调用 `CGDisplayHideCursor` 没有消除视频中的重复箭头。
 
 本机版本基于官方 `v2026.914.233613`，源码提交固定为 `63d35f702ee9e362e43263742981836ec0710384`。补丁保存在 [local-cursor.patch](../sunshine/local-cursor.patch)，没有修改视频分辨率、配对或键盘协议。

@@ -1,5 +1,7 @@
 # 输入链路
 
+> 当前内置版请看 [收敛实现](converged-input.md)。本页保留旧 Helper / Vector 应用模块链路的历史说明，不代表当前运行组成。
+
 本文描述已验收的 UU 基线路径。Moonlight 的连续手势实现、本地光标与待验收项目另见 [Moonlight 输入适配](moonlight-input.md)。
 
 平板端两个 Vector 作用域职责分开：系统模块在小米快捷键拦截之前选择路由，UU 模块处理远控消息和触控板动作。Mac 端只有一个 `Pad Mac Helper.app` 和一个 launchd 项。

@@ -18,6 +18,7 @@ import java.util.function.Consumer;
 public final class RemoteFunctionReceiver extends BroadcastReceiver implements Application.ActivityLifecycleCallbacks {
     private WeakReference<Activity> foreground = new WeakReference<>(null);
     private final Consumer<String> accept;
+    private final Application application;
     private int traceBudget = 12;
     private final String screenClass;
 
@@ -26,11 +27,18 @@ public final class RemoteFunctionReceiver extends BroadcastReceiver implements A
     }
 
     public RemoteFunctionReceiver(Application app, Consumer<String> accept, String screenClass) {
+        this.application = app;
         this.accept = accept;
         this.screenClass = screenClass;
         app.registerActivityLifecycleCallbacks(this);
         app.registerReceiver(this, new IntentFilter(FnCommand.ACTION), "android.permission.INJECT_EVENTS",
                 new Handler(Looper.getMainLooper()), Context.RECEIVER_EXPORTED);
+    }
+
+    public void close() {
+        application.unregisterReceiver(this);
+        application.unregisterActivityLifecycleCallbacks(this);
+        foreground.clear();
     }
 
     @Override public void onReceive(Context context, Intent intent) {

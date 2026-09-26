@@ -3,7 +3,6 @@ import ApplicationServices
 
 // 只匹配实测的 UU 被控辅助进程；普通鼠标和其他应用不在作用范围内。
 let uuExecutable = "/Applications/UURemote.app/Contents/Helpers/UURemoteServer"
-let bridgeMarker: Int64 = 0x50414455554d4143
 let mosMarker: Int64 = 0x4d4f53534d4f4f54
 
 struct ScrollPhaseState {

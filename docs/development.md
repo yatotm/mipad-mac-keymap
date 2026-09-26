@@ -1,5 +1,7 @@
 # 构建与迭代
 
+> 当前内置版请看 [收敛实现](converged-input.md)。本页保留旧 Helper / Vector 应用模块链路的历史说明，不代表当前运行组成。
+
 当前工具链为 macOS、Python 3、JDK、Xcode Command Line Tools、Android SDK 35。脚本默认使用 Homebrew OpenJDK，也可通过 `JAVA_HOME` 指定。
 
 ## Android

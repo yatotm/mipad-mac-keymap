@@ -90,7 +90,7 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
             for (XC_MethodHook.Unhook hook : installed) hook.unhook();
             throw error;
         }
-        Log.i(TAG, "v1.9 已加载：保留 UU，并支持官方 Moonlight 的 Mac 键盘布局");
+        Log.i(TAG, "v1.10 已加载：UU、官方 Moonlight 与定制客户端使用同一键盘布局");
     }
 
     private boolean isUuWindow(Object window) throws Exception {
@@ -112,11 +112,11 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
         if (window == null) return "";
         String name = (String) windowOwner.invoke(window);
         if ("com.netease.uuremote".equals(name)) return name;
-        if ("com.limelight".equals(name)) {
+        if ("com.limelight".equals(name) || "local.pad.moonlight.client".equals(name)) {
             // Moonlight 的设备列表和设置保留安卓布局，仅串流页面启用。
             Object attrs = XposedHelpers.callMethod(window, "getAttrs");
             String title = String.valueOf(XposedHelpers.callMethod(attrs, "getTitle"));
-            if (title.equals("com.limelight/com.limelight.Game")) return name;
+            if (title.equals(name + "/com.limelight.Game")) return name;
         }
         return "";
     }

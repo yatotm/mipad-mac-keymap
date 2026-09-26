@@ -1,0 +1,362 @@
+diff --git a/app/build.gradle b/app/build.gradle
+index c9cc3e4..a2e6edd 100644
+--- a/app/build.gradle
++++ b/app/build.gradle
+@@ -4,6 +4,7 @@ android {
+     ndkVersion "29.0.14206865"
+ 
+     compileSdk 37
++    buildToolsVersion "37.0.0"
+ 
+     namespace 'com.limelight'
+ 
+@@ -11,8 +12,9 @@ android {
+         minSdk 21
+         targetSdk 36
+ 
+-        versionName "12.2"
+-        versionCode = 315
++        versionName "12.2-pad.1"
++        versionCode = 31501
++        ndk { abiFilters "arm64-v8a" }
+ 
+         // Generate native debug symbols to allow Google Play to symbolicate our native crashes
+         ndk.debugSymbolLevel = 'FULL'
+@@ -43,13 +45,14 @@ android {
+         }
+ 
+         nonRoot {
++            minSdk 35
+             externalNativeBuild {
+                 ndkBuild {
+                     arguments "PRODUCT_FLAVOR=nonRoot"
+                 }
+             }
+ 
+-            applicationId "com.limelight"
++            applicationId "local.pad.moonlight"
+             dimension "root"
+             buildConfigField "boolean", "ROOT_BUILD", "false"
+         }
+@@ -81,6 +84,15 @@ android {
+         }
+     }
+ 
++    signingConfigs {
++        pad {
++            storeFile file(System.getenv("PAD_KEYSTORE"))
++            storePassword System.getenv("PAD_KEYSTORE_PASSWORD")
++            keyAlias "pad-uu"
++            keyPassword System.getenv("PAD_KEYSTORE_PASSWORD")
++        }
++    }
++
+     buildTypes {
+         debug {
+             applicationIdSuffix ".debug"
+@@ -88,6 +100,7 @@ android {
+             resValue "string", "app_label_root", "Moonlight (Root Debug)"
+         }
+         release {
++            signingConfig signingConfigs.pad
+             // To whomever is releasing/using an APK in release mode with
+             // Moonlight's official application ID, please stop. I see every
+             // single one of your crashes in my Play Console and it makes
+@@ -118,8 +131,8 @@ android {
+             // is to please change the applicationId before you publish.
+             //
+             // TL;DR: Leave the following line alone!
+-            applicationIdSuffix ".unofficial"
+-            resValue "string", "app_label", "Moonlight"
++            applicationIdSuffix ".client"
++            resValue "string", "app_label", "MiPad Moonlight"
+             resValue "string", "app_label_root", "Moonlight (Root)"
+ 
+             minifyEnabled true
+diff --git a/app/src/main/java/com/limelight/Game.java b/app/src/main/java/com/limelight/Game.java
+index 8d369b3..65f2eb3 100644
+--- a/app/src/main/java/com/limelight/Game.java
++++ b/app/src/main/java/com/limelight/Game.java
+@@ -133,6 +133,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
+     private InputCaptureProvider inputCaptureProvider;
+     private int modifierFlags = 0;
+     private boolean grabbedInput = true;
++    private com.limelight.pad.PadSession padInput;
+     private boolean cursorVisible = false;
+     private boolean waitingForAllModifiersUp = false;
+     private int specialKeyCode = KeyEvent.KEYCODE_UNKNOWN;
+@@ -486,6 +487,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
+                 new ComputerDetails.AddressTuple(host, port),
+                 httpsPort, uniqueId, config,
+                 PlatformBinding.getCryptoProvider(this), serverCert);
++        padInput = new com.limelight.pad.PadSession(this, streamView, conn,
++                () -> connected && grabbedInput && hasWindowFocus());
+         controllerHandler = new ControllerHandler(this, conn, this, prefConfig);
+         keyboardTranslator = new KeyboardTranslator();
+ 
+@@ -741,6 +744,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
+     @Override
+     public void onWindowFocusChanged(boolean hasFocus) {
+         super.onWindowFocusChanged(hasFocus);
++        if (padInput != null) padInput.focus(hasFocus);
+ 
+         // We can't guarantee the state of modifiers keys which may have
+         // lifted while focus was not on us. Clear the modifier state.
+@@ -1034,6 +1038,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
+ 
+     @Override
+     protected void onDestroy() {
++        if (padInput != null) padInput.close();
+         super.onDestroy();
+ 
+         if (controllerHandler != null) {
+@@ -1060,8 +1065,15 @@ public class Game extends Activity implements SurfaceHolder.Callback,
+         inputCaptureProvider.destroy();
+     }
+ 
++    @Override
++    protected void onResume() {
++        super.onResume();
++        if (padInput != null) padInput.resume();
++    }
++
+     @Override
+     protected void onPause() {
++        if (padInput != null) padInput.pause();
+         if (isFinishing()) {
+             // Stop any further input device notifications before we lose focus (and pointer capture)
+             if (controllerHandler != null) {
+@@ -1166,6 +1178,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
+         setMetaKeyCaptureState(grab);
+ 
+         grabbedInput = grab;
++        if (padInput != null) padInput.focus(hasWindowFocus());
+     }
+ 
+     private final Runnable toggleGrab = new Runnable() {
+@@ -1326,6 +1339,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
+ 
+     @Override
+     public boolean handleKeyDown(KeyEvent event) {
++        if (padInput != null) padInput.key(event);
+         // Pass-through virtual navigation keys
+         if ((event.getFlags() & KeyEvent.FLAG_VIRTUAL_HARD_KEY) != 0) {
+             return false;
+@@ -1408,6 +1422,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
+ 
+     @Override
+     public boolean handleKeyUp(KeyEvent event) {
++        if (padInput != null) padInput.key(event);
+         // Pass-through virtual navigation keys
+         if ((event.getFlags() & KeyEvent.FLAG_VIRTUAL_HARD_KEY) != 0) {
+             return false;
+@@ -1783,6 +1798,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
+     // Returns true if the event was consumed
+     // NB: View is only present if called from a view callback
+     private boolean handleMotionEvent(View view, MotionEvent event) {
++        if (padInput != null && padInput.motion(event)) return true;
+         // Pass through mouse/touch/joystick input if we're not grabbing
+         if (!grabbedInput) {
+             return false;
+@@ -2298,6 +2314,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
+         runOnUiThread(new Runnable() {
+             @Override
+             public void run() {
++                if (padInput != null) padInput.disconnected();
+                 // Let the display go to sleep now
+                 getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+ 
+@@ -2401,6 +2418,11 @@ public class Game extends Activity implements SurfaceHolder.Callback,
+         });
+     }
+ 
++    @Override
++    public void padInputState(byte[] data) {
++        runOnUiThread(() -> { if (padInput != null) padInput.state(data); });
++    }
++
+     @Override
+     public void connectionStarted() {
+         runOnUiThread(new Runnable() {
+@@ -2413,6 +2435,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
+ 
+                 connected = true;
+                 connecting = false;
++                if (padInput != null) padInput.started();
+                 updatePipAutoEnter();
+ 
+                 // Hide the mouse cursor now after a short delay.
+diff --git a/app/src/main/java/com/limelight/nvstream/NvConnection.java b/app/src/main/java/com/limelight/nvstream/NvConnection.java
+index f29563f..f30e3d1 100644
+--- a/app/src/main/java/com/limelight/nvstream/NvConnection.java
++++ b/app/src/main/java/com/limelight/nvstream/NvConnection.java
+@@ -450,38 +450,52 @@ public class NvConnection {
+         }).start();
+     }
+     
++    public interface InputAdapter {
++        boolean mouseMove(short x, short y);
++        boolean mousePosition(short x, short y, short width, short height);
++        boolean mouseButton(byte button, boolean down);
++        void keySent(short key, byte action, byte flags);
++    }
++    private volatile InputAdapter inputAdapter;
++    public void setInputAdapter(InputAdapter adapter) { inputAdapter = adapter; }
++
+     public void sendMouseMove(final short deltaX, final short deltaY)
+     {
+         if (!isMonkey) {
+-            MoonBridge.sendMouseMove(deltaX, deltaY);
++            InputAdapter adapter = inputAdapter;
++            if (adapter == null || !adapter.mouseMove(deltaX, deltaY)) MoonBridge.sendMouseMove(deltaX, deltaY);
+         }
+     }
+ 
+     public void sendMousePosition(short x, short y, short referenceWidth, short referenceHeight)
+     {
+         if (!isMonkey) {
+-            MoonBridge.sendMousePosition(x, y, referenceWidth, referenceHeight);
++            InputAdapter adapter = inputAdapter;
++            if (adapter == null || !adapter.mousePosition(x, y, referenceWidth, referenceHeight)) MoonBridge.sendMousePosition(x, y, referenceWidth, referenceHeight);
+         }
+     }
+ 
+     public void sendMouseMoveAsMousePosition(short deltaX, short deltaY, short referenceWidth, short referenceHeight)
+     {
+         if (!isMonkey) {
+-            MoonBridge.sendMouseMoveAsMousePosition(deltaX, deltaY, referenceWidth, referenceHeight);
++            InputAdapter adapter = inputAdapter;
++            if (adapter == null || !adapter.mouseMove(deltaX, deltaY)) MoonBridge.sendMouseMoveAsMousePosition(deltaX, deltaY, referenceWidth, referenceHeight);
+         }
+     }
+ 
+     public void sendMouseButtonDown(final byte mouseButton)
+     {
+         if (!isMonkey) {
+-            MoonBridge.sendMouseButton(MouseButtonPacket.PRESS_EVENT, mouseButton);
++            InputAdapter adapter = inputAdapter;
++            if (adapter == null || !adapter.mouseButton(mouseButton, true)) MoonBridge.sendMouseButton(MouseButtonPacket.PRESS_EVENT, mouseButton);
+         }
+     }
+     
+     public void sendMouseButtonUp(final byte mouseButton)
+     {
+         if (!isMonkey) {
+-            MoonBridge.sendMouseButton(MouseButtonPacket.RELEASE_EVENT, mouseButton);
++            InputAdapter adapter = inputAdapter;
++            if (adapter == null || !adapter.mouseButton(mouseButton, false)) MoonBridge.sendMouseButton(MouseButtonPacket.RELEASE_EVENT, mouseButton);
+         }
+     }
+     
+@@ -500,6 +514,8 @@ public class NvConnection {
+     public void sendKeyboardInput(final short keyMap, final byte keyDirection, final byte modifier, final byte flags) {
+         if (!isMonkey) {
+             MoonBridge.sendKeyboardInput(keyMap, keyDirection, modifier, flags);
++            InputAdapter adapter = inputAdapter;
++            if (adapter != null) adapter.keySent(keyMap, keyDirection, flags);
+         }
+     }
+     
+diff --git a/app/src/main/java/com/limelight/nvstream/NvConnectionListener.java b/app/src/main/java/com/limelight/nvstream/NvConnectionListener.java
+index a6109db..a5bc0bb 100644
+--- a/app/src/main/java/com/limelight/nvstream/NvConnectionListener.java
++++ b/app/src/main/java/com/limelight/nvstream/NvConnectionListener.java
+@@ -6,6 +6,7 @@ public interface NvConnectionListener {
+     void stageFailed(String stage, int portFlags, int errorCode);
+     
+     void connectionStarted();
++    default void padInputState(byte[] data) {}
+     void connectionTerminated(int errorCode);
+     void connectionStatusUpdate(int connectionStatus);
+     
+diff --git a/app/src/main/java/com/limelight/nvstream/jni/MoonBridge.java b/app/src/main/java/com/limelight/nvstream/jni/MoonBridge.java
+index 0dcafff..b15807d 100644
+--- a/app/src/main/java/com/limelight/nvstream/jni/MoonBridge.java
++++ b/app/src/main/java/com/limelight/nvstream/jni/MoonBridge.java
+@@ -354,6 +354,13 @@ public class MoonBridge {
+ 
+     public static native void interruptConnection();
+ 
++    public static native int sendPadInput(byte[] data);
++    public static native int getHostFeatureFlags();
++
++    public static void bridgeClPadState(byte[] data) {
++        if (connectionListener != null) connectionListener.padInputState(data);
++    }
++
+     public static native void sendMouseMove(short deltaX, short deltaY);
+ 
+     public static native void sendMousePosition(short x, short y, short referenceWidth, short referenceHeight);
+diff --git a/app/src/main/jni/moonlight-core/callbacks.c b/app/src/main/jni/moonlight-core/callbacks.c
+index b9be691..058f07a 100644
+--- a/app/src/main/jni/moonlight-core/callbacks.c
++++ b/app/src/main/jni/moonlight-core/callbacks.c
+@@ -38,6 +38,7 @@ static jmethodID BridgeClSetHdrModeMethod;
+ static jmethodID BridgeClRumbleTriggersMethod;
+ static jmethodID BridgeClSetMotionEventStateMethod;
+ static jmethodID BridgeClSetControllerLEDMethod;
++static jmethodID BridgeClPadStateMethod;
+ static jbyteArray DecodedFrameBuffer;
+ static jshortArray DecodedAudioBuffer;
+ 
+@@ -101,6 +102,7 @@ Java_com_limelight_nvstream_jni_MoonBridge_init(JNIEnv *env, jclass clazz) {
+     BridgeClSetHdrModeMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClSetHdrMode", "(Z[B)V");
+     BridgeClRumbleTriggersMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClRumbleTriggers", "(SSS)V");
+     BridgeClSetMotionEventStateMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClSetMotionEventState", "(SBS)V");
++    BridgeClPadStateMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClPadState", "([B)V");
+     BridgeClSetControllerLEDMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClSetControllerLED", "(SBBB)V");
+ }
+ 
+@@ -378,6 +380,18 @@ void BridgeClSetMotionEventState(uint16_t controllerNumber, uint8_t motionType,
+     }
+ }
+ 
++// 回调只复制有界元数据，界面更新由 Java 主线程处理。
++void BridgeClPadState(const char* data, int length) {
++    JNIEnv* env = GetThreadEnv();
++    if (!data || length <= 0 || length > PAD_STATE_MAX) return;
++    jbyteArray bytes = (*env)->NewByteArray(env, length);
++    if (!bytes) return;
++    (*env)->SetByteArrayRegion(env, bytes, 0, length, (const jbyte*)data);
++    (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeClPadStateMethod, bytes);
++    (*env)->DeleteLocalRef(env, bytes);
++    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
++}
++
+ void BridgeClSetControllerLED(uint16_t controllerNumber, uint8_t r, uint8_t g, uint8_t b) {
+     JNIEnv* env = GetThreadEnv();
+ 
+@@ -426,6 +440,7 @@ static CONNECTION_LISTENER_CALLBACKS BridgeConnListenerCallbacks = {
+         .rumbleTriggers = BridgeClRumbleTriggers,
+         .setMotionEventState = BridgeClSetMotionEventState,
+         .setControllerLED = BridgeClSetControllerLED,
++        .padState = BridgeClPadState,
+ };
+ 
+ static bool
+diff --git a/app/src/main/jni/moonlight-core/simplejni.c b/app/src/main/jni/moonlight-core/simplejni.c
+index eef1c5e..3d54bb3 100644
+--- a/app/src/main/jni/moonlight-core/simplejni.c
++++ b/app/src/main/jni/moonlight-core/simplejni.c
+@@ -270,4 +270,19 @@ JNIEXPORT jboolean JNICALL
+ Java_com_limelight_nvstream_jni_MoonBridge_guessControllerHasShareButton(JNIEnv *env, jclass clazz, jint vendorId, jint productId) {
+     // Xbox Series X controllers have a share button
+     return SDL_IsJoystickXboxSeriesX(vendorId, productId);
+-}
+\ No newline at end of file
++}
++JNIEXPORT jint JNICALL
++Java_com_limelight_nvstream_jni_MoonBridge_sendPadInput(JNIEnv *env, jclass clazz, jbyteArray bytes) {
++    if (!bytes) return -1;
++    jsize length = (*env)->GetArrayLength(env, bytes);
++    if (length <= 0 || length > PAD_PAYLOAD_MAX) return -1;
++    char data[PAD_PAYLOAD_MAX];
++    (*env)->GetByteArrayRegion(env, bytes, 0, length, (jbyte*)data);
++    if ((*env)->ExceptionCheck(env)) return -1;
++    return LiSendPadInput(data, (unsigned int)length);
++}
++
++JNIEXPORT jint JNICALL
++Java_com_limelight_nvstream_jni_MoonBridge_getHostFeatureFlags(JNIEnv *env, jclass clazz) {
++    return (jint)LiGetHostFeatureFlags();
++}

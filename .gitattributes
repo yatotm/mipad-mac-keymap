@@ -1,2 +1,3 @@
 # 补丁的空白上下文行属于 diff 格式，源码本身仍执行空白检查。
 sunshine/*.patch -whitespace
+moonlight/patches/*.patch -whitespace

@@ -26,7 +26,8 @@ info = {
 (contents / "Info.plist").write_bytes(plistlib.dumps(info))
 binary = contents / "MacOS/PadMacHelper"
 subprocess.run(["xcrun", "swiftc", "-O", "-o", str(binary),
-                *map(str, sorted((root / "mac-helper/Sources").glob("*.swift")))], check=True)
+                *map(str, sorted((root / "mac-helper/Sources").glob("*.swift"))),
+                *map(str, sorted((root / "mac-input/Sources").glob("*.swift")))], check=True)
 subprocess.run([str(binary), "--self-test"], check=True)
 identity_file = root / ".local/mac-signing-identity"
 identity = os.environ.get("PAD_MAC_SIGN_IDENTITY") or (identity_file.read_text().strip() if identity_file.exists() else "-")

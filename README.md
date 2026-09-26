@@ -1,28 +1,23 @@
 # MiPad Mac Keymap
 
-针对小米 Pad 6 Max（yudi / HyperOS OS3.0.6.0.VMHCNXM / Android 15）、Mac、UU 远程及 Moonlight 的输入适配。
+为小米 Pad 6 Max（yudi、HyperOS 3 / Android 15）、配套键盘与 Mac 提供远控输入适配。
 
-上次实体 Fn 验收通过的基线为系统键盘 1.8、UU 输入 0.11.2、Mac Helper 0.3.0；其他输入沿用已确认基本恢复的 0.11.1 路径。
+本轮内置版已部署并完成握手、断开 ADB 和会话清理验证，等待用户按 [清单](docs/manual-input-checklist.md) 进行实体及公网验收。
 
-当前安装系统键盘 1.9、Moonlight 模块 0.2.6 和 Helper 0.5.4。官方 Moonlight 与同版本 Sunshine 本地光标补丁已授权、配对并实际连接。触控板原始坐标现在驱动平板本地光标，点击按当前主显示器的逻辑尺寸定位；双指横滑使用连续事件，保留中途保持和反向。用户已确认 Chrome 导航、Launchpad 翻页、通知方向和当前触控手势正常；Sunshine 捕获补丁已消除视频中滞后的第二个箭头，用户确认鼠标正常；重新登记新签名的辅助功能权限后，键盘也恢复正常。见 [手动测试清单](docs/manual-input-checklist.md) 和 [实现与验证边界](docs/moonlight-input.md)。
+当前链路为 **MiPad Moonlight → 已配对、加密的串流连接 → Sunshine 内置输入后端**。普通键盘使用上游协议；本地光标、双指连续滚动、三指导航/拖拽、捏合与 Fn 使用同一连接中的扩展消息。日常输入不再需要 Wi-Fi ADB，也不需要独立的 Pad Mac Helper。公网连接沿用 Moonlight/Sunshine 原有方式，没有新增远控端口或修改路由设置。
 
-蓝牙模式下，按住原 Ctrl 时，部分顶排的 Consumer 用途码被报告成修饰键位图。系统模块现在还原用途并消费假修饰键，通过受保护的本机消息和已配对的 ADB TLS 通道执行 Mac 功能。Fn 不再依赖媒体键穿过安卓系统和 UU 的普通键盘分发。
+Mac 的显示仍由 BetterDisplay 管理。安卓保留 Vector 系统键盘模块，避免 HyperOS 抢走修饰键和顶排功能键。物理左下角 Ctrl 为按住式 Fn，语音键为 Control，四叶草为 Option，Alt 为 Command；适配仅在远控画面前台生效。
 
-UU 路径的上下滚动、双指左右、三指下滑/左右切屏经 UU 发送；Fn、捏合打开 Launchpad、三指上滑使用独立 ADB 控制。Moonlight 路径的指针、按钮、滚动和连续系统手势由同一个 Helper 接收，普通键盘继续走 Moonlight/Sunshine。Mac 只保留一个输入辅助 App，不占用 Control＋Option＋Command＋空格作为控制协议。
+- `moonlight/client`：客户端内置的本地光标与输入会话。
+- `moonlight/patches`：Moonlight Android 和 moonlight-common-c 的上游接入补丁。
+- `sunshine/input`、`sunshine/converged.patch`：Sunshine 会话接入及静态链接的 Swift 后端。
+- `mac-input`：共享 Mac 原生事件实现。
+- `protocol`：两端共享的协议常量。
+- `android/system-keyboard`、`magisk/keyboard-layout`：安卓系统键位入口及前台路由。
+- `android/moonlight-input`、`android/uu-input`、`mac-helper`：保留的旧链路源码，用于回退；新客户端不加载这些应用级输入插件。
+- `magisk/wifi-adb`：仅用于开发调试的已配对 TLS ADB 入口，日常远控不依赖它。
+- `.local`、`.cache`、`build`：本地签名/回退、临时依赖、构建产物，不提交 Git。
 
-- `android/system-keyboard`：Vector 系统作用域的按键路由。
-- `android/uu-input`：仅 UU 作用域的键盘与触控板适配。
-- `android/moonlight-input`：官方 Moonlight 12.2 作用域的本地光标、连续手势、拖拽与键盘释放保护。
-- `magisk/keyboard-layout`：指定键盘的缺失键位入口。
-- `magisk/wifi-adb`：固定端口 23333 转发至 Android 原生 TLS 无线调试，保留配对认证。
-- `mac-helper`：Mac 端滚动适配和功能动作。
-- `tools`：构建与部署脚本。
-- `.local`、`.cache`、`build`：本地密钥、缓存和构建产物，不提交 Git。
+二开的全部新增源码、上游补丁、固定提交和构建步骤都保存在本仓库 main，不需要另一个私有 fork。详见 [收敛实现与构建](docs/converged-input.md)、[手动验收](docs/manual-input-checklist.md) 和 [验证记录](docs/verification.md)。历史 UU/Helper 开发步骤见 [旧链路开发说明](docs/development.md)。
 
-项目不修改 UU 原 APK，不修改 Codex 或终端快捷键，不记录输入文字。
-
-构建和部署见 [开发说明](docs/development.md)，协议与作用范围见 [输入链路](docs/architecture.md)，验证状态见 [验证记录](docs/verification.md)。
-
-Moonlight/Sunshine 的源码适配评估见 [源码审查报告](docs/moonlight-sunshine-source-review.md)。
-
-Helper 收敛、去除日常 ADB 依赖及外网方案见 [技术评估](docs/helper-convergence-and-wan.md)。0.2.6 已加入双指轻触右击与较小光标，用户确认正常；并发按键在蓝牙模式已确认正常，触点模式仍有上报暂停，见 [并发记录](docs/keyboard-pointer-concurrency.md)。
+本项目不修改 Codex 或终端快捷键，不记录输入文字。已知的触点连接“按键时暂停触控上报”尚未修复；蓝牙模式经用户确认正常，见 [并发记录](docs/keyboard-pointer-concurrency.md)。本地光标保持已验收的较小固定箭头，动态光标形状仍未实现。

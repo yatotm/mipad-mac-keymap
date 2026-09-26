@@ -1,0 +1,20 @@
+[
+  {
+    "package": "platforms;android-37.0",
+    "url": "https://dl.google.com/android/repository/platform-37.0_r02.zip",
+    "sha1": "ed8ebf7f8822a4de5686d427f237d2fa30ff7410",
+    "size": 67281901
+  },
+  {
+    "package": "ndk;29.0.14206865",
+    "url": "https://dl.google.com/android/repository/android-ndk-r29-darwin.zip",
+    "sha1": "03d29fbb57e3c05a7d53597dd011d856c1456a4f",
+    "size": 1049519838
+  },
+  {
+    "package": "build-tools;37.0.0",
+    "url": "https://dl.google.com/android/repository/build-tools_r37_macosx.zip",
+    "sha1": "eb080751b2b2028eb3604f571027d6f7b3c46321",
+    "size": 81933386
+  }
+]

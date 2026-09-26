@@ -7,6 +7,8 @@ import os
 import plistlib
 import shutil
 import subprocess
+import sys
+import sync_streaming_sources as sources
 
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
@@ -18,7 +20,7 @@ commit = '63d35f702ee9e362e43263742981836ec0710384'
 build = root / '.cache/cmake-build-sunshine'
 stage = root / 'build/sunshine-stage'
 app = stage / 'Sunshine.app'
-env = dict(os.environ, BRANCH='pad-local-cursor', BUILD_VERSION='2026.914.233613')
+env = dict(os.environ, BRANCH='pad-converged-input', BUILD_VERSION='2026.914.233613')
 
 
 def run(*cmd, cwd=source):
@@ -27,11 +29,15 @@ def run(*cmd, cwd=source):
 
 if subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=source, text=True).strip() != commit:
     raise SystemExit('Sunshine 源码必须固定到 v2026.914.233613。')
-patch = root / 'sunshine/local-cursor.patch'
-if subprocess.run(['git', 'apply', '--reverse', '--check', str(patch)], cwd=source, capture_output=True).returncode:
-    run('git', 'apply', '--check', patch)
-    run('git', 'apply', patch)
+sources.sunshine(source)
+run(sys.executable, root / 'tools/build_pad_native.py', cwd=root)
+swift = json.loads(subprocess.check_output(['xcrun', 'swiftc', '-print-target-info'], text=True))
+swift_runtime = swift['paths']['runtimeLibraryImportPaths'][0]
+swift_sdk = Path(subprocess.check_output(['xcrun', '--show-sdk-path'], text=True).strip()) / 'usr/lib/swift'
 run('cmake', '-S', source, '-B', build, '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release',
+    '-DPAD_INPUT_ARCHIVE=' + str(root / '.cache/mac-native/libPadInput.a'),
+    '-DPAD_INPUT_ROOT=' + str(root / 'sunshine/input'), '-DPAD_PROTOCOL_ROOT=' + str(root / 'protocol'),
+    '-DPAD_SWIFT_RUNTIME=' + swift_runtime, '-DPAD_SWIFT_SDK=' + str(swift_sdk),
     '-DBUILD_DOCS=OFF', '-DBUILD_TESTS=OFF', '-DSUNSHINE_ENABLE_TRAY=OFF', '-DBOOST_USE_STATIC=ON',
     '-DOPUS_USE_STATIC=ON', '-DCMAKE_PREFIX_PATH=/opt/homebrew', '-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0',
     '-DSUNSHINE_PUBLISHER_NAME=MiPad Mac Keymap',
@@ -50,10 +56,11 @@ if not web.is_dir():
     raise SystemExit('缺少相同版本的官方网页资源。')
 shutil.copytree(web, app / 'Contents/Resources/assets/web', dirs_exist_ok=True)
 resources = app / 'Contents/Resources'
-(resources / 'pad-local-cursor.json').write_text(json.dumps({'source': commit, 'revision': 1}) + '\n')
+(resources / 'pad-local-cursor.json').write_text(json.dumps({'source': commit, 'revision': 2}) + '\n')
 info_path = app / 'Contents/Info.plist'
 info = plistlib.loads(info_path.read_bytes())
-info['PadCursorRevision'] = '1'
+info['PadCursorRevision'] = '2'
+info['PadInputProtocol'] = '1'
 info['LSMinimumSystemVersion'] = '15.0'
 info_path.write_bytes(plistlib.dumps(info))
 identity = (root / '.local/mac-signing-identity').read_text().strip()

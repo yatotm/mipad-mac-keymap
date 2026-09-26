@@ -1,0 +1,153 @@
+diff --git a/src/ControlStream.c b/src/ControlStream.c
+index 2b5182e..525c516 100644
+--- a/src/ControlStream.c
++++ b/src/ControlStream.c
+@@ -1,5 +1,7 @@
+ #include "Limelight-internal.h"
+ 
++#define PAD_ASYNC_STATE 100
++
+ // This is a private header, but it just contains some time macros
+ #include <enet/time.h>
+ 
+@@ -83,6 +85,7 @@ typedef struct _QUEUED_ASYNC_CALLBACK {
+             uint8_t left[DS_EFFECT_PAYLOAD_SIZE];
+             uint8_t right[DS_EFFECT_PAYLOAD_SIZE];
+         } dsAdaptiveTrigger;
++        struct { int length; char bytes[PAD_STATE_MAX]; } pad;
+     } data;
+     LINKED_BLOCKING_QUEUE_ENTRY entry;
+ } QUEUED_ASYNC_CALLBACK, *PQUEUED_ASYNC_CALLBACK;
+@@ -909,6 +912,9 @@ static void asyncCallbackThreadFunc(void* context) {
+ 
+     while (LbqWaitForQueueElement(&asyncCallbackQueue, (void**)&queuedCb) == LBQ_SUCCESS) {
+         switch (queuedCb->typeIndex) {
++        case PAD_ASYNC_STATE:
++            ListenerCallbacks.padState(queuedCb->data.pad.bytes, queuedCb->data.pad.length);
++            break;
+         case IDX_RUMBLE_DATA:
+             // Look for another rumble packet to batch with
+             while (LbqPeekQueueElement(&asyncCallbackQueue, (void**)&nextCb) == LBQ_SUCCESS) {
+@@ -1021,7 +1027,8 @@ static void asyncCallbackThreadFunc(void* context) {
+ }
+ 
+ static bool needsAsyncCallback(unsigned short packetType) {
+-    return packetType == packetTypes[IDX_RUMBLE_DATA] ||
++    return packetType == PAD_STATE_TYPE ||
++           packetType == packetTypes[IDX_RUMBLE_DATA] ||
+            packetType == packetTypes[IDX_RUMBLE_TRIGGER_DATA] ||
+            packetType == packetTypes[IDX_SET_MOTION_EVENT] ||
+            packetType == packetTypes[IDX_SET_RGB_LED] ||
+@@ -1043,7 +1050,17 @@ static void queueAsyncCallback(PNVCTL_ENET_PACKET_HEADER_V1 ctlHdr, int packetLe
+ 
+     BbInitializeWrappedBuffer(&bb, (char*)ctlHdr, sizeof(*ctlHdr), packetLength - sizeof(*ctlHdr), BYTE_ORDER_LITTLE);
+ 
+-    if (ctlHdr->type == packetTypes[IDX_RUMBLE_DATA]) {
++    if (ctlHdr->type == PAD_STATE_TYPE) {
++        int length = packetLength - (int)sizeof(*ctlHdr);
++        if (!(SunshineFeatureFlags & PAD_FEATURE_FLAG) || length <= 0 || length > PAD_STATE_MAX) {
++            free(queuedCb);
++            return;
++        }
++        queuedCb->typeIndex = PAD_ASYNC_STATE;
++        queuedCb->data.pad.length = length;
++        memcpy(queuedCb->data.pad.bytes, (const char*)ctlHdr + sizeof(*ctlHdr), length);
++    }
++    else if (ctlHdr->type == packetTypes[IDX_RUMBLE_DATA]) {
+         BbAdvanceBuffer(&bb, 4);
+ 
+         BbGet16(&bb, &queuedCb->data.rumble.controllerNumber);
+diff --git a/src/FakeCallbacks.c b/src/FakeCallbacks.c
+index 29fdf18..8a173b6 100644
+--- a/src/FakeCallbacks.c
++++ b/src/FakeCallbacks.c
+@@ -42,6 +42,8 @@ static void fakeClSetMotionEventState(uint16_t controllerNumber, uint8_t motionT
+ static void fakeClSetAdaptiveTriggers(uint16_t controllerNumber, uint8_t eventFlags, uint8_t typeLeft, uint8_t typeRight, uint8_t *left, uint8_t *right) {};
+ static void fakeClSetControllerLED(uint16_t controllerNumber, uint8_t r, uint8_t g, uint8_t b) {}
+ 
++static void fakeClPadState(const char* data, int length) {}
++
+ static CONNECTION_LISTENER_CALLBACKS fakeClCallbacks = {
+     .stageStarting = fakeClStageStarting,
+     .stageComplete = fakeClStageComplete,
+@@ -56,6 +58,7 @@ static CONNECTION_LISTENER_CALLBACKS fakeClCallbacks = {
+     .setMotionEventState = fakeClSetMotionEventState,
+     .setControllerLED = fakeClSetControllerLED,
+     .setAdaptiveTriggers = fakeClSetAdaptiveTriggers,
++    .padState = fakeClPadState,
+ };
+ 
+ void fixupMissingCallbacks(PDECODER_RENDERER_CALLBACKS* drCallbacks, PAUDIO_RENDERER_CALLBACKS* arCallbacks,
+@@ -143,6 +146,7 @@ void fixupMissingCallbacks(PDECODER_RENDERER_CALLBACKS* drCallbacks, PAUDIO_REND
+         if ((*clCallbacks)->setControllerLED == NULL) {
+             (*clCallbacks)->setControllerLED = fakeClSetControllerLED;
+         }
++        if ((*clCallbacks)->padState == NULL) { (*clCallbacks)->padState = fakeClPadState; }
+         if ((*clCallbacks)->setAdaptiveTriggers == NULL) {
+             (*clCallbacks)->setAdaptiveTriggers = fakeClSetAdaptiveTriggers;
+         }
+diff --git a/src/InputStream.c b/src/InputStream.c
+index 5994836..cefdf64 100644
+--- a/src/InputStream.c
++++ b/src/InputStream.c
+@@ -1636,3 +1636,20 @@ int LiSendControllerBatteryEvent(uint8_t controllerNumber, uint8_t batteryState,
+ 
+     return err;
+ }
++
++// 与普通输入共用有界队列和控制流加密；负载不包含任意远程命令。
++int LiSendPadInput(const char* data, unsigned int length) {
++    if (!initialized) return -2;
++    if (!encryptedControlStream || !(SunshineFeatureFlags & PAD_FEATURE_FLAG)) return LI_ERR_UNSUPPORTED;
++    if (!data || length == 0 || length > PAD_PAYLOAD_MAX) return -1;
++    PPACKET_HOLDER holder = allocatePacketHolder((int)length);
++    if (!holder) return -1;
++    holder->channelId = CTRL_CHANNEL_MOUSE;
++    holder->enetPacketFlags = ENET_PACKET_FLAG_RELIABLE;
++    holder->packet.unicode.header.size = BE32(sizeof(uint32_t) + length);
++    holder->packet.unicode.header.magic = LE32(PAD_INPUT_MAGIC);
++    memcpy(holder->packet.unicode.text, data, length);
++    int result = LbqOfferQueueItem(&packetQueue, holder, &holder->entry);
++    if (result != LBQ_SUCCESS) freePacketHolder(holder);
++    return result;
++}
+diff --git a/src/Limelight.h b/src/Limelight.h
+index 5e1bbcd..597b68b 100644
+--- a/src/Limelight.h
++++ b/src/Limelight.h
+@@ -5,6 +5,7 @@
+ #pragma once
+ 
+ #include <stdint.h>
++#include "pad_input.h"
+ #include <stdbool.h>
+ 
+ #ifdef __cplusplus
+@@ -483,6 +484,9 @@ typedef void(*ConnListenerSetAdaptiveTriggers)(uint16_t controllerNumber, uint8_
+ // This callback is invoked to set a controller's RGB LED (if present).
+ typedef void(*ConnListenerSetControllerLED)(uint16_t controllerNumber, uint8_t r, uint8_t g, uint8_t b);
+ 
++// 回传经过加密通道认证的 Pad 显示元数据。
++typedef void(*ConnListenerPadState)(const char* data, int length);
++
+ typedef struct _CONNECTION_LISTENER_CALLBACKS {
+     ConnListenerStageStarting stageStarting;
+     ConnListenerStageComplete stageComplete;
+@@ -497,6 +501,7 @@ typedef struct _CONNECTION_LISTENER_CALLBACKS {
+     ConnListenerSetMotionEventState setMotionEventState;
+     ConnListenerSetControllerLED setControllerLED;
+     ConnListenerSetAdaptiveTriggers setAdaptiveTriggers;
++    ConnListenerPadState padState;
+ } CONNECTION_LISTENER_CALLBACKS, *PCONNECTION_LISTENER_CALLBACKS;
+ 
+ // Use this function to zero the connection callbacks when allocated on the stack or heap
+@@ -1013,6 +1018,9 @@ void LiRequestIdrFrame(void);
+ #define LI_FF_CONTROLLER_TOUCH_EVENTS 0x02 // LiSendControllerTouchEvent() supported
+ uint32_t LiGetHostFeatureFlags(void);
+ 
++// 仅用于协商成功的加密 Pad 输入。
++int LiSendPadInput(const char* data, unsigned int length);
++
+ #ifdef __cplusplus
+ }
+ #endif

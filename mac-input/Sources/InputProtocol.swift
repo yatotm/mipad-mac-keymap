@@ -25,6 +25,8 @@ struct InputFrame: Decodable {
     let v: Int
     let t: String
     let at: Int64
+    let seq: UInt64?
+    let epoch: UInt64?
     let a: String?
     let x: Int32?
     let y: Int32?

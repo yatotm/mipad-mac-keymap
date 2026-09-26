@@ -43,8 +43,9 @@ settings = {
     "StandardErrorPath": "/dev/null",
     "ProcessType": "Interactive",
 }
-if (binary.parent.parent / "Resources/pad-local-cursor.json").is_file():
+info = plistlib.loads((binary.parent.parent / "Info.plist").read_bytes())
+if (binary.parent.parent / "Resources/pad-local-cursor.json").is_file() and not info.get("PadInputProtocol"):
     settings["EnvironmentVariables"] = {"PAD_LOCAL_CURSOR": "1"}
 agent.write_bytes(plistlib.dumps(settings))
 subprocess.run(["launchctl", "bootstrap", domain, str(agent)], check=True)
-print("Sunshine 已注册；这是串流服务，输入适配仍由唯一的 Pad Mac Helper 负责。")
+print("Sunshine 已注册；输入后端已内置。" if info.get("PadInputProtocol") else "Sunshine 已注册；这是回退用的旧输入链路。")
