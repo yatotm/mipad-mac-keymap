@@ -10,8 +10,11 @@ final class AdbInputReader {
     private var watchdog: DispatchSourceTimer?
     private let onFrame: (InputFrame) -> Void
     private let onState: (String) -> Void
+    private let package: String
 
-    init(onFrame: @escaping (InputFrame) -> Void, onState: @escaping (String) -> Void) {
+    init(package: String = "com.netease.uuremote", onFrame: @escaping (InputFrame) -> Void, onState: @escaping (String) -> Void) {
+        precondition(["com.netease.uuremote", "com.limelight"].contains(package))
+        self.package = package
         self.onFrame = onFrame
         self.onState = onState
     }
@@ -115,7 +118,7 @@ final class AdbInputReader {
     }
 
     private func read(_ config: ConnectionConfiguration, device: String) {
-        let base = "/data/user/0/com.netease.uuremote/files/pad_uu_input"
+        let base = "/data/user/0/\(package)/files/pad_uu_input"
         // 锁只覆盖本通道，防止断线后两个 cat 同时分食 FIFO；文件始终为零字节。
         // Android mksh 的 exec 重定向默认带 CLOEXEC，显式传递 9 才能让锁跨进程保留。
         let remote = "su -c 'umask 077; exec 9>\(base).lock; flock -n 9 9>&9 || exit 75; exec cat \(base).pipe 9>&9'"

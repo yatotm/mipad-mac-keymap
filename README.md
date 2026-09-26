@@ -1,8 +1,10 @@
 # MiPad Mac Keymap
 
-针对小米 Pad 6 Max（yudi / HyperOS OS3.0.6.0.VMHCNXM / Android 15）和 UU 远程 4.40.0 的输入适配。
+针对小米 Pad 6 Max（yudi / HyperOS OS3.0.6.0.VMHCNXM / Android 15）、Mac、UU 远程及 Moonlight 的输入适配。
 
-当前版本：系统键盘 1.8、UU 输入 0.11.2、Mac Helper 0.3.0。用户已确认 Fn 功能生效；其他输入沿用已确认基本恢复的 0.11.1 路径。
+上次实体 Fn 验收通过的基线为系统键盘 1.8、UU 输入 0.11.2、Mac Helper 0.3.0；其他输入沿用已确认基本恢复的 0.11.1 路径。
+
+`feature/moonlight-input` 新增系统键盘 1.9、Moonlight 模块 0.1.0 和 Helper 0.4.0。官方 Moonlight / Sunshine 已安装并配对；新 Helper 与 Sunshine 尚需 macOS 系统权限，当前常驻 Helper 仍为 0.3.0。实现、启用步骤与未完成的实体验收见 [Moonlight 输入适配](docs/moonlight-input.md)。
 
 蓝牙模式下，按住原 Ctrl 时，部分顶排的 Consumer 用途码被报告成修饰键位图。系统模块现在还原用途并消费假修饰键，通过受保护的本机消息和已配对的 ADB TLS 通道执行 Mac 功能。Fn 不再依赖媒体键穿过安卓系统和 UU 的普通键盘分发。
 
@@ -10,6 +12,7 @@
 
 - `android/system-keyboard`：Vector 系统作用域的按键路由。
 - `android/uu-input`：仅 UU 作用域的键盘与触控板适配。
+- `android/moonlight-input`：官方 Moonlight 12.2 作用域的连续手势、拖拽与键盘释放保护。
 - `magisk/keyboard-layout`：指定键盘的缺失键位入口。
 - `magisk/wifi-adb`：固定端口 23333 转发至 Android 原生 TLS 无线调试，保留配对认证。
 - `mac-helper`：Mac 端滚动适配和功能动作。

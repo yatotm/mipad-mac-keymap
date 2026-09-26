@@ -8,6 +8,16 @@ if CommandLine.arguments.contains("--self-test") {
     precondition(InputFrame.decode(Data(#"{"v":2,"t":"reset","at":1}"#.utf8)) == nil)
     precondition(InputFrame.decode(Data(#"{"v":1,"t":"scroll","at":1,"x":9000,"y":0,"phase":"changed","mods":0}"#.utf8)) == nil)
     precondition(InputFrame.decode(Data(#"{"v":1,"t":"scroll","at":1,"x":0,"y":0,"phase":"unknown","mods":0}"#.utf8)) == nil)
+    precondition(InputFrame.decode(Data(#"{"v":1,"t":"gesture","at":1,"axis":4,"progress":0,"velocity":0,"phase":"began"}"#.utf8)) == nil)
+    precondition(InputFrame.decode(Data(#"{"v":1,"t":"gesture","at":1,"axis":1,"progress":5,"velocity":0,"phase":"began"}"#.utf8)) == nil)
+    for (name, code) in [("began", 1), ("changed", 2), ("ended", 4), ("cancelled", 8)] {
+        let event = NativeGesture.event(source: CGEventSource(stateID: .privateState), axis: 1,
+                                         progress: -0.3, velocity: 0, phase: name)!
+        precondition(event.getIntegerValueField(CGEventField(rawValue: 55)!) == 30)
+        precondition(event.getIntegerValueField(CGEventField(rawValue: 132)!) == code)
+        let bits = UInt32(truncatingIfNeeded: event.getIntegerValueField(CGEventField(rawValue: 135)!))
+        precondition(abs(Double(Float(bitPattern: bits)) + 0.3) < 0.00001)
+    }
     var clock = InputClock()
     precondition(!clock.accepts(action, now: 20))
     precondition(clock.accepts(sync, now: 20))

@@ -1,7 +1,7 @@
 import AppKit
 
 final class NativeScroll {
-    private let source = CGEventSource(stateID: .privateState)
+    private let source = CGEventSource(stateID: .combinedSessionState)
     private var contact = false
     private var momentum = false
     private var flags = CGEventFlags()
@@ -23,7 +23,7 @@ final class NativeScroll {
     }
 
     private func post(x: Int32 = 0, y: Int32 = 0, phase: String) {
-        Self.event(source: source, x: x, y: y, phase: phase, flags: flags)?.post(tap: .cgAnnotatedSessionEventTap)
+        Self.event(source: source, x: x, y: y, phase: phase, flags: flags)?.post(tap: .cgSessionEventTap)
     }
 
     func receive(_ frame: InputFrame) {

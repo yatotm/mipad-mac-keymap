@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""构建两个独立的 Vector 模块，签名材料仅从本地目录读取。"""
+"""构建独立的 Vector 模块，签名材料仅从本地目录读取。"""
 from pathlib import Path
 import argparse
 import hashlib
@@ -11,7 +11,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("module", choices=["system-keyboard", "uu-input"])
+parser.add_argument("module", choices=["system-keyboard", "uu-input", "moonlight-input"])
 args = parser.parse_args()
 base = ROOT / "android" / args.module
 sdk = Path(os.environ.get("PAD_ANDROID_SDK", ROOT / ".cache/sdk"))
@@ -37,7 +37,10 @@ def run(*command):
 
 
 sources = sorted((base / "src").rglob("*.java"))
-entry = "SystemKeyboard.java" if args.module == "system-keyboard" else "PadTouchpad.java"
+if args.module == "moonlight-input":
+    shared = ROOT / "android/uu-input/src/local/pad/uu/touchpad"
+    sources += [shared / name for name in ["InputPipe.java", "FnCommand.java", "RemoteFunctionReceiver.java", "ScrollMomentum.java"]]
+entry = {"system-keyboard": "SystemKeyboard.java", "uu-input": "PadTouchpad.java", "moonlight-input": "MoonlightInput.java"}[args.module]
 tests = sorted((base / "tests").glob("*.java"))
 run(java / "javac", "--release", "11", "-encoding", "UTF-8", "-classpath", android,
     "-d", build / "tests", *[p for p in sources if p.name != entry], *tests)

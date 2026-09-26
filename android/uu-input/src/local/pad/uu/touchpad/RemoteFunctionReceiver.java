@@ -19,9 +19,15 @@ public final class RemoteFunctionReceiver extends BroadcastReceiver implements A
     private WeakReference<Activity> foreground = new WeakReference<>(null);
     private final Consumer<String> accept;
     private int traceBudget = 12;
+    private final String screenClass;
 
     public RemoteFunctionReceiver(Application app, Consumer<String> accept) {
+        this(app, accept, "com.remote.app.ui.activity.ScreenActivity");
+    }
+
+    public RemoteFunctionReceiver(Application app, Consumer<String> accept, String screenClass) {
         this.accept = accept;
+        this.screenClass = screenClass;
         app.registerActivityLifecycleCallbacks(this);
         app.registerReceiver(this, new IntentFilter(FnCommand.ACTION), "android.permission.INJECT_EVENTS",
                 new Handler(Looper.getMainLooper()), Context.RECEIVER_EXPORTED);
@@ -45,7 +51,7 @@ public final class RemoteFunctionReceiver extends BroadcastReceiver implements A
     }
 
     @Override public void onActivityResumed(Activity activity) {
-        if ("com.remote.app.ui.activity.ScreenActivity".equals(activity.getClass().getName())) {
+        if (screenClass.equals(activity.getClass().getName())) {
             foreground = new WeakReference<>(activity);
         }
     }

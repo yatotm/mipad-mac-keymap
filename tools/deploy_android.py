@@ -13,7 +13,8 @@ import xml.etree.ElementTree as ET
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--serial", required=True, help="已授权的 ADB 设备地址或序列号")
-parser.add_argument("--module", choices=["all", "system-keyboard", "uu-input"], default="all")
+parser.add_argument("--module", choices=["all", "system-keyboard", "uu-input", "moonlight-input"], default="all",
+                    help="all 保持原 UU 两模块的部署范围；Moonlight 需显式选择")
 parser.add_argument("--reboot", action="store_true", help="全部安装检查通过后重启平板")
 args = parser.parse_args()
 adb = ["adb", "-s", args.serial]

@@ -1,7 +1,7 @@
 import Foundation
 import CoreGraphics
 
-// 输入协议只接受固定动作和像素滚动，不包含任意命令、文件路径或文字输入。
+// 输入协议只接受固定动作、像素滚动和手势，不包含任意命令、文件路径或文字输入。
 struct InputFrame: Decodable {
     let v: Int
     let t: String
@@ -11,6 +11,9 @@ struct InputFrame: Decodable {
     let y: Int32?
     let phase: String?
     let mods: Int?
+    let axis: Int?
+    let progress: Double?
+    let velocity: Double?
 
     static let actions: Set<String> = ["brightness-down", "brightness-up", "mic-mute", "screenshot",
         "assistant", "sleep", "previous", "play-pause", "next", "mute", "volume-down", "volume-up",
@@ -29,6 +32,16 @@ struct InputFrame: Decodable {
             guard let x = frame.x, let y = frame.y, (-2048...2048).contains(x), (-2048...2048).contains(y),
                   let phase = frame.phase, phases.contains(phase), let mods = frame.mods,
                   (0...0x7fffffff).contains(mods) else { return nil }
+        case "gesture":
+            guard let axis = frame.axis, (1...3).contains(axis),
+                  let progress = frame.progress, progress.isFinite, abs(progress) <= 4,
+                  let velocity = frame.velocity, velocity.isFinite, abs(velocity) <= 12,
+                  let phase = frame.phase, ["began", "changed", "ended", "cancelled"].contains(phase)
+            else { return nil }
+        case "magnify":
+            guard let delta = frame.progress, delta.isFinite, abs(delta) <= 0.5,
+                  let phase = frame.phase, ["began", "changed", "ended", "cancelled"].contains(phase),
+                  let mods = frame.mods, (0...0x7fffffff).contains(mods) else { return nil }
         case "reset": break
         default: return nil
         }

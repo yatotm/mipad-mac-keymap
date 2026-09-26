@@ -52,14 +52,21 @@ for line in listing.splitlines():
         continue
     helper = any(parts[1] == p or parts[1].startswith(p + " ") for p in executables)
     # Foundation 的子进程可能在 Helper 被终止后继续存活，只结束本插件的读取命令。
-    reader = ("/adb -s " in parts[1] and " exec-out su -c 'umask 077; exec 9>" in parts[1]
-              and "/data/user/0/com.netease.uuremote/files/pad_uu_input.pipe 9>&9'" in parts[1])
+    reader = (parts[1].split(" ", 1)[0].endswith("/adb") and " exec-out su -c 'umask 077; exec 9>" in parts[1]
+              and any(f"/data/user/0/{package}/files/pad_uu_input.pipe 9>&9'" in parts[1]
+                      for package in ["com.netease.uuremote", "com.limelight"]))
     if helper or reader:
         try:
             os.kill(int(parts[0]), signal.SIGTERM)
         except ProcessLookupError:
             pass
 time.sleep(.3)
+for _ in range(100):
+    if subprocess.run(["launchctl", "print", domain + "/local.pad.uu.ScrollBridge"], capture_output=True).returncode != 0:
+        break
+    time.sleep(.1)
+else:
+    raise SystemExit("旧 Helper 尚未退出，暂不替换应用。")
 if target.exists():
     shutil.rmtree(target)
 staged.rename(target)

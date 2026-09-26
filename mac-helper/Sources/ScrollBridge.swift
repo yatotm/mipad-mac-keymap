@@ -24,6 +24,13 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
     private var reader: AdbInputReader?
+    private var moonlightReader: AdbInputReader?
+    private var moonlightClock = InputClock()
+    private let moonlightScroll = NativeScroll()
+    private let moonlightGesture = NativeGesture()
+    private let moonlightMagnify = NativeMagnify()
+    private var moonlightConnection = "stopped"
+    private var moonlightFrames = 0
     private var inputClock = InputClock()
     private let nativeScroll = NativeScroll()
     private var connection = "stopped"
@@ -80,7 +87,7 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
         title.font = .boldSystemFont(ofSize: 22)
         title.frame = NSRect(x: 24, y: 205, width: 470, height: 32)
         let info = NSTextField(wrappingLabelWithString:
-            "通过已配对的 ADB 接收触控和功能控制。\n普通打字与组合键仍由 UU 处理。")
+            "统一处理远控触控板和功能键。\n普通打字与鼠标由 UU 或 Moonlight 传输。")
         info.frame = NSRect(x: 24, y: 128, width: 470, height: 62)
         let label = NSTextField(labelWithString: "等待辅助功能权限")
         label.frame = NSRect(x: 24, y: 92, width: 470, height: 28)
@@ -103,7 +110,7 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func menuWillOpen(_ menu: NSMenu) {
-        summary?.title = tap != nil ? "通道：\(connection) · 滚动 \(receivedScroll) 次" : "未启用：需辅助功能权限"
+        summary?.title = tap != nil ? "UU：\(connection) · Moonlight：\(moonlightConnection)" : "未启用：需辅助功能权限"
     }
 
     @objc private func openSettings() {
@@ -136,11 +143,24 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
         source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: port, enable: true)
-        summary?.title = "UU 滚动适配已启用"
+        summary?.title = "Pad 输入适配已启用"
         let input = AdbInputReader(onFrame: { [weak self] frame in self?.receive(frame) },
                                    onState: { [weak self] state in self?.connectionChanged(state) })
         reader = input
         input.start()
+        let moonlight = AdbInputReader(package: "com.limelight", onFrame: { [weak self] frame in
+            self?.receiveMoonlight(frame)
+        }, onState: { [weak self] state in
+            guard let self else { return }
+            self.moonlightConnection = state
+            self.moonlightClock = InputClock()
+            self.moonlightScroll.reset()
+            self.moonlightGesture.reset()
+            self.moonlightMagnify.reset()
+            self.writeStatus()
+        })
+        moonlightReader = moonlight
+        moonlight.start()
         stateLabel?.stringValue = "正在连接平板输入通道"
         writeStatus()
     }
@@ -151,11 +171,13 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // 合并短时间内的计数更新，磁盘操作不进入输入回调。
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             self.statusQueued = false
-            let value: [String: Any] = ["version": "0.3.0", "pid": ProcessInfo.processInfo.processIdentifier,
+            let value: [String: Any] = ["version": "0.4.0", "pid": ProcessInfo.processInfo.processIdentifier,
                 "permission": AXIsProcessTrusted(), "keyboard_tap": false,
                 "scroll_tap": self.tap != nil, "connection": self.connection,
                 "received_actions": self.receivedActions, "finished_actions": self.finishedActions,
-                "received_scroll": self.receivedScroll, "rejected_frames": self.rejectedFrames]
+                "received_scroll": self.receivedScroll, "rejected_frames": self.rejectedFrames,
+                "moonlight_connection": self.moonlightConnection, "moonlight_frames": self.moonlightFrames,
+                "native_gesture_os_supported": NativeGesture.supported]
             self.statusWriter.async {
                 try? FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
                 if let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) {
@@ -206,6 +228,30 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
             cancelHorizontalNavigation()
             pendingActions.removeAll()
         default: break
+        }
+    }
+
+    private func receiveMoonlight(_ frame: InputFrame) {
+        guard moonlightClock.accepts(frame, now: ProcessInfo.processInfo.systemUptime) else {
+            moonlightScroll.reset(); moonlightGesture.reset(); moonlightMagnify.reset()
+            rejectedFrames += 1
+            return
+        }
+        moonlightConnection = "connected"
+        stateLabel?.stringValue = "Moonlight 输入已连接"
+        moonlightFrames += 1
+        switch frame.t {
+        case "scroll": moonlightScroll.receive(frame)
+        case "gesture": moonlightGesture.receive(frame)
+        case "magnify": moonlightMagnify.receive(frame)
+        case "action": if let action = frame.a { enqueue(action) }
+        case "reset": moonlightScroll.reset(); moonlightGesture.reset(); moonlightMagnify.reset()
+        default: break
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastStatusUpdate > 1 {
+            lastStatusUpdate = now
+            writeStatus()
         }
     }
 
@@ -309,6 +355,9 @@ final class Bridge: NSObject, NSApplicationDelegate, NSMenuDelegate {
         tap = nil
         source = nil
         reader?.stop(); reader = nil
+        moonlightReader?.stop(); moonlightReader = nil
+        moonlightScroll.reset(); moonlightGesture.reset(); moonlightMagnify.reset()
+        moonlightClock = InputClock(); moonlightConnection = "stopped"
         nativeScroll.reset()
         cancelHorizontalNavigation()
         inputClock = InputClock()

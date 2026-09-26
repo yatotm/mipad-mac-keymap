@@ -17,6 +17,7 @@ public final class InputPipe {
     private FileDescriptor output;
     private long retryAt;
     private int modifiers;
+    private boolean active = true;
 
     public InputPipe(File directory) throws Exception {
         path = new File(directory, "pad_uu_input.pipe").getAbsolutePath();
@@ -80,7 +81,7 @@ public final class InputPipe {
 
     private synchronized void heartbeat() {
         // 心跳不落盘；让读取端识别断线，也让残留的旧读取进程及时退出。
-        try { send(packet("sync").put("mods", modifiers)); } catch (Exception ignored) {}
+        if (active) try { send(packet("sync").put("mods", modifiers)); } catch (Exception ignored) {}
     }
 
     public synchronized boolean scroll(int x, int y, String phase) {
@@ -92,4 +93,24 @@ public final class InputPipe {
         modifiers = 0;
         try { send(packet("reset")); } catch (Exception ignored) {}
     }
+
+    public synchronized boolean gesture(int axis, double progress, double velocity, String phase) {
+        try { return send(packet("gesture").put("axis", axis).put("progress", progress)
+                .put("velocity", velocity).put("phase", phase)); }
+        catch (Exception ignored) { return false; }
+    }
+
+    public synchronized boolean magnify(double delta, String phase) {
+        try { return send(packet("magnify").put("progress", delta).put("phase", phase).put("mods", modifiers)); }
+        catch (Exception ignored) { return false; }
+    }
+
+    public synchronized void active(boolean value) {
+        if (active == value) return;
+        if (!value) { reset(); close(); }
+        active = value;
+        if (value) heartbeat();
+    }
+
+    public synchronized boolean available() { return active && open(); }
 }

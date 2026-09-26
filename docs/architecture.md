@@ -1,5 +1,7 @@
 # 输入链路
 
+本文描述已验收的 UU 基线路径。Moonlight 的连续手势实现、系统权限阻塞和待验收项目另见 [Moonlight 输入适配](moonlight-input.md)。
+
 平板端两个 Vector 作用域职责分开：系统模块在小米快捷键拦截之前选择路由，UU 模块处理远控消息和触控板动作。Mac 端只有一个 `Pad Mac Helper.app` 和一个 launchd 项。
 
 ## Fn 与普通键
@@ -62,7 +64,7 @@ CoreAudio 负责音量/静音；已有 BetterDisplay 负责亮度；系统应用
 
 `connection.json` 与输入处理分开，支持域名/IPv4/IPv6 地址格式，未来可用 Tailscale 地址或 MagicDNS。**固定 23333 模块目前仅转发 Wi-Fi IPv4 地址**，VPN 入站路由和端口转发还需适配。本版不改变 VPN 或监听范围。
 
-完整虚拟多点 HID 设备、按位移跟手的系统动画尚未实现。现成 Karabiner DriverKit 项目主要提供键盘/鼠标。后续实验必须与已验证路径分开，按单项真实行为验收后再切换。
+完整虚拟多点 HID 设备尚未实现。Moonlight 分支已实现按位移更新、带开始和结束阶段的系统手势通道，实际跟手效果仍待授权后的实机验证。现成 Karabiner DriverKit 项目主要提供键盘/鼠标。实验与已验证路径分开，按单项真实行为验收后再切换。
 
 ## 数据与诊断
 

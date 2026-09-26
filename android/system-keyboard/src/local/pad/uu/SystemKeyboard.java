@@ -7,6 +7,7 @@ import android.content.Intent;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.os.UserHandle;
 import android.util.Log;
 import android.view.InputDevice;
 import android.view.InputEvent;
@@ -24,7 +25,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 /** 仅针对本机系统和已确认的小米键盘，在系统输入链路中实现 UU 专用布局。 */
 public final class SystemKeyboard implements IXposedHookLoadPackage {
     private static final String TAG = "PadUuKeyboard";
-    private static final String TARGET = "com.netease.uuremote";
+    private volatile String targetPackage = "";
     private static final int PASS_TO_USER = 0x40000000;
     private final FunctionRoutes routes = new FunctionRoutes();
     private final FunctionRoutes modifierRoutes = new FunctionRoutes();
@@ -78,12 +79,7 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
         try {
             installed.add(XposedBridge.hookMethod(focus, new XC_MethodHook() {
                 @Override protected void afterHookedMethod(MethodHookParam p) throws Throwable {
-                    uuFocused = isUuWindow(p.args[0]);
-                    if (!uuFocused) {
-                        fn.cancel();
-                        bluetoothFn.cancel();
-                        focusGeneration++;
-                    }
+                    updateFocus(p.args[0]);
                 }
             }));
             installed.add(XposedBridge.hookMethod(early, new QueueHook()));
@@ -94,11 +90,35 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
             for (XC_MethodHook.Unhook hook : installed) hook.unhook();
             throw error;
         }
-        Log.i(TAG, "v1.8 已加载：还原蓝牙 Fn Consumer 位图，功能请求由系统直接交给 UU");
+        Log.i(TAG, "v1.9 已加载：保留 UU，并支持官方 Moonlight 的 Mac 键盘布局");
     }
 
     private boolean isUuWindow(Object window) throws Exception {
-        return window != null && TARGET.equals(windowOwner.invoke(window));
+        return !remotePackage(window).isEmpty();
+    }
+
+    private synchronized void updateFocus(Object window) throws Exception {
+        String next = remotePackage(window);
+        if (!next.equals(targetPackage)) {
+            fn.cancel();
+            bluetoothFn.cancel();
+            focusGeneration++;
+        }
+        targetPackage = next;
+        uuFocused = !next.isEmpty();
+    }
+
+    private String remotePackage(Object window) throws Exception {
+        if (window == null) return "";
+        String name = (String) windowOwner.invoke(window);
+        if ("com.netease.uuremote".equals(name)) return name;
+        if ("com.limelight".equals(name)) {
+            // Moonlight 的设备列表和设置保留安卓布局，仅串流页面启用。
+            Object attrs = XposedHelpers.callMethod(window, "getAttrs");
+            String title = String.valueOf(XposedHelpers.callMethod(attrs, "getTitle"));
+            if (title.equals("com.limelight/com.limelight.Game")) return name;
+        }
+        return "";
     }
 
     private static int family(InputDevice device) {
@@ -167,15 +187,18 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
 
     private void sendFunction(Object policy, int index) {
         long generation = focusGeneration;
+        String destination = targetPackage;
         long when = SystemClock.elapsedRealtime();
         Context context = (Context) XposedHelpers.getObjectField(policy, "mContext");
         functions().post(() -> {
             if (!uuFocused || generation != focusGeneration || SystemClock.elapsedRealtime() - when > 500) return;
             try {
-                Intent intent = new Intent("local.pad.uu.FUNCTION").setPackage(TARGET)
+                Intent intent = new Intent("local.pad.uu.FUNCTION").setPackage(destination)
                         .addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
                         .putExtra("v", 1).putExtra("index", index).putExtra("when", when);
-                context.sendBroadcast(intent, null, BroadcastOptions.makeBasic().setShareIdentityEnabled(true).toBundle());
+                XposedHelpers.callMethod(context, "sendBroadcastAsUser", intent,
+                        UserHandle.getUserHandleForUid(1000), null,
+                        BroadcastOptions.makeBasic().setShareIdentityEnabled(true).toBundle());
                 if (functionLogBudget-- > 0) Log.i(TAG, "系统 Fn 功能请求 index=" + index);
             } catch (Throwable error) {
                 if (functionLogBudget-- > 0) Log.e(TAG, "发送 Fn 功能请求失败", error);
@@ -232,7 +255,7 @@ public final class SystemKeyboard implements IXposedHookLoadPackage {
             boolean down = event.getAction() == KeyEvent.ACTION_DOWN;
             if (event.getAction() != KeyEvent.ACTION_DOWN
                     && event.getAction() != KeyEvent.ACTION_UP) return;
-            uuFocused = isUuWindow(XposedHelpers.getObjectField(p.thisObject, "mFocusedWindow"));
+            updateFocus(XposedHelpers.getObjectField(p.thisObject, "mFocusedWindow"));
             int scan = event.getScanCode();
             if (group == 1 && BluetoothFn.bit(scan) != 0
                     && bluetoothFn.update(scan, down, event.getEventTime(), uuFocused && (Boolean) p.args[2])) {

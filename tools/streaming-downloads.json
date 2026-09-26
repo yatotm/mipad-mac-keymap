@@ -1,0 +1,16 @@
+{
+  "moonlight": {
+    "version": "12.2",
+    "source_commit": "b48494cb96bff23d8886c4775cc4f39a1075495d",
+    "url": "https://github.com/moonlight-stream/moonlight-android/releases/download/v12.2/app-nonRoot-release.apk",
+    "sha256": "a871f6190365386ef3ac5722a016d4da015ee1555631ec257f6e5dc3f4a45fe0",
+    "signer_sha256": "d6ce3a4df15060fe488fe52441a549dee4ba199b36e2cb1ed9085cca8bfa1aca"
+  },
+  "sunshine": {
+    "version": "2026.914.233613",
+    "source_commit": "63d35f702ee9e362e43263742981836ec0710384",
+    "url": "https://github.com/LizardByte/Sunshine/releases/download/v2026.914.233613/Sunshine-macOS-arm64.dmg",
+    "sha256": "795f03a389c5726f9a7b15f501dc1ddf204b442cae565859ac83aae027a9e07c",
+    "team_id": "F8XQ7XCN2R"
+  }
+}

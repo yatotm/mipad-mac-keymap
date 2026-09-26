@@ -4,6 +4,7 @@ from pathlib import Path
 import plistlib
 import shutil
 import subprocess
+import os
 
 root = Path(__file__).resolve().parents[1]
 app = root / "build/Pad Mac Helper.app"
@@ -17,8 +18,8 @@ info = {
     "CFBundleDisplayName": "Pad Mac Helper",
     "CFBundleExecutable": "PadMacHelper",
     "CFBundlePackageType": "APPL",
-    "CFBundleVersion": "4",
-    "CFBundleShortVersionString": "0.3.0",
+    "CFBundleVersion": "5",
+    "CFBundleShortVersionString": "0.4.0",
     "LSUIElement": True,
     "NSHighResolutionCapable": True,
 }
@@ -27,6 +28,8 @@ binary = contents / "MacOS/PadMacHelper"
 subprocess.run(["xcrun", "swiftc", "-O", "-o", str(binary),
                 *map(str, sorted((root / "mac-helper/Sources").glob("*.swift")))], check=True)
 subprocess.run([str(binary), "--self-test"], check=True)
-subprocess.run(["codesign", "--force", "--sign", "-", str(app)], check=True)
+identity_file = root / ".local/mac-signing-identity"
+identity = os.environ.get("PAD_MAC_SIGN_IDENTITY") or (identity_file.read_text().strip() if identity_file.exists() else "-")
+subprocess.run(["codesign", "--force", "--sign", identity, str(app)], check=True, timeout=30)
 subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
 print(app)
